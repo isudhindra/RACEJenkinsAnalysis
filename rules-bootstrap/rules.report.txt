@@ -1,0 +1,193 @@
+========================================================================
+  RULES BOOTSTRAP — ANALYSIS REPORT
+========================================================================
+
+  Total samples analyzed:  51
+  Error groups found:      19
+  Rules generated:         19
+
+  Domain distribution:
+    Environment / Infrastructure         8 rule(s)
+    API / Backend Service                3 rule(s)
+    Build / Configuration                3 rule(s)
+    Automation / Framework               2 rule(s)
+    UI / Frontend                        1 rule(s)
+    Browser / Driver                     1 rule(s)
+    Test Data                            1 rule(s)
+
+------------------------------------------------------------------------
+
+  GROUP 1: Timeout
+  Domain:      Environment / Infrastructure
+  Subcategory: Timeout
+  Samples:     7
+  Patterns:    4
+  Affected jobs: checkout-integration-tests, frontend-selenium-suite, inventory-service-smoke, order-processing-e2e, platform-full-regression
+  Primary pattern: TimeoutException
+  Sample: org.openqa.selenium.TimeoutException: Expected condition failed: waiting for visibility of element located by By.id: das...
+
+  GROUP 2: Assertion Logic Error
+  Domain:      Automation / Framework
+  Subcategory: Assertion Logic Error
+  Samples:     6
+  Patterns:    6
+  Affected jobs: checkout-integration-tests, nightly-data-integrity, order-processing-e2e, user-auth-e2e
+  Primary pattern: AssertionError
+  Sample: ERROR: Expected 150 records in table 'user_transactions' but found 0. No data returned from query. AssertionError: recor...
+
+  GROUP 3: Locator Mismatch
+  Domain:      UI / Frontend
+  Subcategory: Locator Mismatch
+  Samples:     4
+  Patterns:    5
+  Affected jobs: checkout-integration-tests, frontend-selenium-suite, platform-full-regression
+  Primary pattern: NoSuchElementException
+  Sample: org.openqa.selenium.NoSuchElementException: no such element: Unable to locate element: {"method":"css selector","selecto...
+
+  GROUP 4: Null Reference
+  Domain:      Automation / Framework
+  Subcategory: Null Reference
+  Samples:     4
+  Patterns:    2
+  Affected jobs: payment-api-unit-tests, user-auth-e2e
+  Primary pattern: NullPointerException
+  Sample: java.lang.NullPointerException: Cannot invoke method on null object reference     at com.payment.service.PaymentProcesso...
+
+  GROUP 5: Connection Refused
+  Domain:      Environment / Infrastructure
+  Subcategory: Connection Refused
+  Samples:     3
+  Patterns:    4
+  Affected jobs: database-migration-check, inventory-service-smoke
+  Primary pattern: ConnectException
+  Sample: [2026-03-31T14:22:01.443Z] ERROR: Connection refused: connect - http://inventory-svc.staging.internal:8080/api/v2/stock ...
+
+  GROUP 6: Out of Memory
+  Domain:      Environment / Infrastructure
+  Subcategory: Out of Memory
+  Samples:     3
+  Patterns:    4
+  Affected jobs: weekly-compliance-scan
+  Primary pattern: ReportOOMFailure
+  Sample: java.lang.OutOfMemoryError: Java heap space     at java.base/java.util.Arrays.copyOf(Arrays.java:3512)     at com.compli...
+
+  GROUP 7: HTTP 5xx
+  Domain:      API / Backend Service
+  Subcategory: HTTP 5xx
+  Samples:     3
+  Patterns:    6
+  Affected jobs: api-contract-validation, payment-api-unit-tests
+  Primary pattern: InternalError
+  Sample: HTTP/1.1 502 Bad Gateway Response body: <html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1><...
+
+  GROUP 8: Connection Reset
+  Domain:      Environment / Infrastructure
+  Subcategory: Connection Reset
+  Samples:     3
+  Patterns:    4
+  Affected jobs: cdn-cache-validation, inventory-service-smoke, payment-api-unit-tests
+  Primary pattern: SocketException
+  Sample: Error: connect ECONNRESET 10.0.3.47:8080     at TLSConnectWrap.afterConnect [as oncomplete] (node:net:1278:16) Request t...
+
+  GROUP 9: Database Connection
+  Domain:      Environment / Infrastructure
+  Subcategory: Database Connection
+  Samples:     2
+  Patterns:    4
+  Affected jobs: order-processing-e2e, platform-full-regression
+  Primary pattern: PSQLException
+  Sample: [ERROR] [2026-03-31 10:15:33.221] Failed to connect to database: Connection pool exhausted - all 50 connections are in u...
+
+  GROUP 10: SSL/TLS Error
+  Domain:      Environment / Infrastructure
+  Subcategory: SSL/TLS Error
+  Samples:     2
+  Patterns:    4
+  Affected jobs: cdn-cache-validation
+  Primary pattern: SSLCertVerificationError
+  Sample: javax.net.ssl.SSLHandshakeException: PKIX path building failed: sun.security.provider.certpath.SunCertPathBuilderExcepti...
+
+  GROUP 11: WebDriver Session Failure
+  Domain:      Browser / Driver
+  Subcategory: WebDriver Session Failure
+  Samples:     2
+  Patterns:    5
+  Affected jobs: frontend-selenium-suite, platform-full-regression
+  Primary pattern: WebDriverException
+  Sample: org.openqa.selenium.SessionNotCreatedException: Could not start a new session. Response code 500. Message: session not c...
+
+  GROUP 12: Authentication Failure
+  Domain:      API / Backend Service
+  Subcategory: Authentication Failure
+  Samples:     2
+  Patterns:    5
+  Affected jobs: api-contract-validation, user-auth-e2e
+  Primary pattern: HTTP/1.1 4\d{2}
+  Sample: FAILED: testLoginWithExpiredToken HTTP 401 Unauthorized: {"error":"token_expired","message":"The access token has expire...
+
+  GROUP 13: Compilation Error
+  Domain:      Build / Configuration
+  Subcategory: Compilation Error
+  Samples:     2
+  Patterns:    4
+  Affected jobs: database-migration-check
+  Primary pattern: (?i)compil(?:ation|e).*(?:failed|failure|error)
+  Sample: BUILD FAILURE [ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.11.0:compile (default-comp...
+
+  GROUP 14: DNS Resolution
+  Domain:      Environment / Infrastructure
+  Subcategory: DNS Resolution
+  Samples:     2
+  Patterns:    3
+  Affected jobs: api-contract-validation, cdn-cache-validation
+  Primary pattern: DNS resolution failed
+  Sample: Error: getaddrinfo ENOTFOUND cdn-origin.staging.internal     at GetAddrInfoReqWrap.onlookup [as oncomplete] (node:dns:10...
+
+  GROUP 15: Permission Denied
+  Domain:      Environment / Infrastructure
+  Subcategory: Permission Denied
+  Samples:     2
+  Patterns:    3
+  Affected jobs: frontend-selenium-suite, weekly-compliance-scan
+  Primary pattern: SQLSyntaxErrorException
+  Sample: Permission denied (publickey,gssapi-keyex,gssapi-with-mic). ssh: connect to host compliance-scanner.internal port 22: P...
+
+  GROUP 16: Authorization Failure
+  Domain:      API / Backend Service
+  Subcategory: Authorization Failure
+  Samples:     1
+  Patterns:    3
+  Affected jobs: user-auth-e2e
+  Primary pattern: HTTP/1.1 4\d{2}
+  Sample: HTTP 403 Forbidden: {"error":"access_denied","message":"Insufficient permissions for resource /api/admin/users"}     at ...
+
+  GROUP 17: Missing Record
+  Domain:      Test Data
+  Subcategory: Missing Record
+  Samples:     1
+  Patterns:    2
+  Affected jobs: nightly-data-integrity
+  Primary pattern: (?i)no data returned
+  Sample: No data returned from query: SELECT * FROM audit_log WHERE event_date > '2026-03-30' Expected at least 1 row but got 0...
+
+  GROUP 18: Dependency Resolution
+  Domain:      Build / Configuration
+  Subcategory: Dependency Resolution
+  Samples:     1
+  Patterns:    2
+  Affected jobs: order-processing-e2e
+  Primary pattern: npm ERR!
+  Sample: npm ERR! code ERESOLVE npm ERR! ERESOLVE unable to resolve dependency tree npm ERR! Found: react@18.2.0 npm ERR! peer re...
+
+  GROUP 19: Schema Mismatch
+  Domain:      Build / Configuration
+  Subcategory: Schema Mismatch
+  Samples:     1
+  Patterns:    1
+  Affected jobs: database-migration-check
+  Primary pattern: relation .+ does not exist
+  Sample: Flyway migration failed: org.flywaydb.core.internal.command.DbMigrate.migrateGroup(DbMigrate.java:182) SQL State  : 42P0...
+
+========================================================================
+  Review the generated rules.yaml and adjust as needed.
+========================================================================

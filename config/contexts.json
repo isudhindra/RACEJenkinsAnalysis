@@ -1,0 +1,45 @@
+{
+  "instances": [
+    {
+      "id": "sit-jenkins",
+      "display_name": "SIT Jenkins",
+      "jenkins_url": "https://jenkins-sit.example.com",
+      "environment": "SIT",
+      "predefined_job_lists": [
+        {
+          "id": "api-smoke-sit",
+          "name": "API Smoke — SIT",
+          "job_list_file": "job_lists/api-smoke-sit.json",
+          "environment": "SIT",
+          "source_mode": "job_list"
+        }
+      ]
+    },
+    {
+      "id": "dev-jenkins",
+      "display_name": "DEV Jenkins",
+      "jenkins_url": "https://jenkins-dev.example.com",
+      "environment": "DEV",
+      "predefined_job_lists": [
+        {
+          "id": "ui-regression-dev",
+          "name": "UI Regression — DEV",
+          "job_list_file": "job_lists/ui-regression-dev.json",
+          "environment": "DEV",
+          "source_mode": "job_list"
+        },
+        {
+          "id": "fe-regression-preprod",
+          "name": "Frontend Regression — Pre-Prod",
+          "job_list_file": "job_lists/frontend-regression-preprod.json",
+          "environment": "PRE-PROD",
+          "source_mode": "job_list"
+        }
+      ]
+    }
+  ],
+  "defaults": {
+    "max_workers": 15,
+    "timeout": 30
+  }
+}

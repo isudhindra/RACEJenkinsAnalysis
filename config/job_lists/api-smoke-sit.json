@@ -1,0 +1,15 @@
+{
+  "name": "API Smoke — SIT",
+  "description": "API smoke tests for system integration testing",
+  "environment": "SIT",
+  "jobs": [
+    "api-smoke-orders-sit",
+    "api-smoke-payments-sit",
+    "api-smoke-inventory-sit",
+    "api-smoke-auth-sit",
+    "api-smoke-catalog-sit",
+    "api-smoke-notifications-sit",
+    "service-auth-validation-sit",
+    "payments-e2e-smoke-sit"
+  ]
+}

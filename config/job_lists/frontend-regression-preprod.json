@@ -1,0 +1,14 @@
+{
+  "name": "Frontend Regression — Pre-Prod",
+  "description": "Frontend regression pack for pre-production validation",
+  "environment": "PRE-PROD",
+  "jobs": [
+    "frontend-plp-regression-preprod",
+    "frontend-pdp-regression-preprod",
+    "frontend-checkout-regression-preprod",
+    "frontend-search-regression-preprod",
+    "frontend-account-regression-preprod",
+    "frontend-promotions-regression-preprod",
+    "frontend-mobile-web-regression-preprod"
+  ]
+}
