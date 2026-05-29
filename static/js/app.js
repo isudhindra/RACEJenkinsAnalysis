@@ -1,11 +1,6 @@
-// Jenkins Dashboard app module — main initialization and event handling for the job table UI.
-// This file contains functions for initializing the dashboard, setting up event listeners,
-// and managing job state updates including refresh, analysis, and filter operations.
+// Jenkins Dashboard app module
 
 'use strict';
-
-// INITIALIZATION — DOMContentLoaded and Jinja2 data injection happen in dashboard.html's inline script.
-// This file provides the setup functions that the bootstrap script calls after page load.
 
 // Populate the Jenkins instance dropdown from parsed contexts data provided by the server.
 function initializeContexts() {
@@ -151,6 +146,7 @@ async function refreshSingleJob(jobId) {
                 jenkins_url: creds.jenkins_url,
                 username: creds.username,
                 api_token: creds.api_token,
+                promotion_time: getPromotionTimeISO(),
             }),
         });
 
@@ -239,7 +235,8 @@ async function requestOnDemandAnalysis(jobId, jobName) {
                 job_name: jobName || jobId.split('/').pop(),
                 jenkins_url: creds.jenkins_url,
                 username: creds.username,
-                api_token: creds.api_token
+                api_token: creds.api_token,
+                promotion_time: getPromotionTimeISO()
             })
         });
 
@@ -277,18 +274,19 @@ async function requestOnDemandAnalysis(jobId, jobName) {
 function clearAllFilters() {
     document.getElementById('filter-status').value = '';
     document.getElementById('filter-search').value = '';
+    var releaseSel = document.getElementById('filter-release-status');
+    if (releaseSel) releaseSel.value = '';
     clearLogAnalysisFilter();
     appState.filters = {
         status: null,
         searchText: '',
-        logAnalysisLabel: null
+        logAnalysisLabel: null,
+        releaseStatus: null
     };
     applyFilters();
 }
 
 // Full dashboard reset called before Fetch Jobs or Full Refresh to start with a clean slate.
-// Clears all table state: filters, search, sort, selections, expanded rows, timers, and UI state.
-// Does NOT clear auth credentials or configuration settings.
 function resetDashboardState() {
     // Abort any in-flight fetch so stale SSE events cannot arrive
     if (appState._fetchAbortController) {
@@ -319,7 +317,9 @@ function resetDashboardState() {
     if (filterStatus) filterStatus.value = '';
     var filterSearch = document.getElementById('filter-search');
     if (filterSearch) filterSearch.value = '';
-    appState.filters = { status: null, searchText: '', logAnalysisLabel: null };
+    var filterRelease = document.getElementById('filter-release-status');
+    if (filterRelease) filterRelease.value = '';
+    appState.filters = { status: null, searchText: '', logAnalysisLabel: null, releaseStatus: null };
     // Clear log analysis autocomplete filter if active
     if (typeof clearLogAnalysisFilter === 'function') clearLogAnalysisFilter();
 

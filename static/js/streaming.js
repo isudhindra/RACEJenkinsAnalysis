@@ -53,7 +53,8 @@ function triggerFetch() {
             username: creds.username,
             api_token: creds.api_token,
             job_names: appState.customJobList.jobs,
-            environment: environment || null
+            environment: environment || null,
+            promotion_time: getPromotionTimeISO()
         };
         appState.currentViewUrl = 'job_list:' + appState.customJobList.name;
     } else {
@@ -76,7 +77,8 @@ function triggerFetch() {
             api_token: creds.api_token,
             view_path: resolved.viewPath,
             view_url: resolved.viewUrl,
-            environment: environment || null
+            environment: environment || null,
+            promotion_time: getPromotionTimeISO()
         };
         appState.currentViewUrl = resolved.viewUrl;
     }
@@ -712,6 +714,13 @@ function handleFetchComplete(data) {
     updateHeaderStatus('connected');
 
     scheduleProgressBarHide(progressBar, progressFill);
+
+    // Start (or restart) the background auto-refresh poll loop now that the
+    // table has data.  initAutoRefresh is idempotent — safe to call after
+    // every fetch_complete.
+    if (typeof initAutoRefresh === 'function') {
+        initAutoRefresh();
+    }
 }
 
 // Abort the active fetch operation and reset UI to idle state
@@ -804,7 +813,8 @@ async function triggerSelectiveRefresh(scope) {
         job_ids: jobIds,
         jenkins_url: creds.jenkins_url,
         username: creds.username,
-        api_token: creds.api_token
+        api_token: creds.api_token,
+        promotion_time: getPromotionTimeISO()
     };
 
     appState.statusTransitions.clear();

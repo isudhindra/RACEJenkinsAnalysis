@@ -177,11 +177,12 @@ function _renderChipHtml(label, color, tooltip) {
     return `<span class="rec-chip rec-chip--${color}" title="${safeTip}"><span class="rec-chip-dot"></span>${safeLabel}</span>`;
 }
 
-// Returns a small superscript indicator if metrics came from console parsing, or empty string otherwise.
-function metricsSourceTag(m) {
-    return (m && m.metrics_source === 'console')
-        ? '<span style="font-size:9px;color:#6B7280;font-weight:500;vertical-align:super" title="Metrics parsed from console output">⌘</span>'
-        : '';
+// Source-of-metrics indicator removed by request — console-parsed and
+// API-sourced totals now render identically.  The function is kept (rather
+// than deleted) so the call sites in renderJobRow / updateJobRow that
+// concatenate its return value remain stable.
+function metricsSourceTag(_m) {
+    return '';
 }
 
 // Renders a complete job table row with all cells: checkbox, name, status, actions, metrics, and analysis chips.

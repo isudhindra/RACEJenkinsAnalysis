@@ -1,100 +1,59 @@
-// Jenkins Dashboard — promotion module for managing code promotion validation and regression testing.
-// Handles promotion datetime selection, regression status tracking for jobs, and UI updates for release validation.
 'use strict';
 
-// PROMOTION BASELINE VALIDATION
-
-// Cache to prevent a job from reverting from 'passed' back to 'failed' for the same promotion baseline
-// Key: jobId, Value: { promoKey, status: 'passed', validatedAt: Date }
-// promoKey is based on promotion time so cache auto-invalidates when user selects a different datetime
-var _validationCache = new Map();
-
-// Convert promotion time to a unique key string for cache comparison
-function _promoKey(promotionTime) {
-    return promotionTime ? promotionTime.getTime().toString() : '';
-}
-
-// Clear the validation cache when needed (e.g., when resetting dashboard)
-function clearValidationCache() {
-    _validationCache.clear();
+// Map a backend ReleaseStatus enum value onto the legacy panel vocabulary.
+function _releaseToRegression(releaseStatus, currentStatus) {
+    switch (releaseStatus) {
+        case 'PASS':    return 'passed';
+        case 'FAIL':    return currentStatus === 'IN_PROGRESS' ? 'in_progress' : 'failed';
+        case 'PENDING': return currentStatus === 'IN_PROGRESS' ? 'in_progress' : 'not_executed';
+        case 'NA':      default: return 'not_executed';
+    }
 }
 
 // Determine if a job has passed validation against a promotion baseline.
-// Returns one of: 'passed' (job ran successfully at least once after promotion),
-// 'failed' (no success since promotion), 'in_progress', or 'not_executed' (no runs after promotion).
-// Result is latched — once validated, it stays validated for the same promotion time.
 function deriveRegressionStatus(job, promotionTime) {
     if (!promotionTime || !job) return 'not_executed';
 
-    var jobId = job.job_id || job.url || job.name || job.job_name || '';
-    var pk = _promoKey(promotionTime);
-
-    // Check the validation latch first — once passed, stays passed for this promotion baseline
-    var cached = _validationCache.get(jobId);
-    if (cached && cached.promoKey === pk && cached.status === 'passed') {
-        return 'passed';
+    // ---- Primary: trust the backend if it has spoken.
+    if (typeof job.release_status === 'string' && job.release_status !== 'NA') {
+        return _releaseToRegression(job.release_status, job.current_status);
     }
 
-    // Collect all available builds from recent_builds and three_run_context
-    var builds = [];
-    var seen = {};  // deduplicate by build_number
-
-    if (Array.isArray(job.recent_builds) && job.recent_builds.length > 0) {
-        for (var i = 0; i < job.recent_builds.length; i++) {
-            var rb = job.recent_builds[i];
-            if (rb && rb.timestamp && rb.build_number != null) {
-                seen[rb.build_number] = true;
-                builds.push({
-                    status: rb.status,
-                    timestamp: new Date(rb.timestamp),
-                    buildNum: rb.build_number,
-                });
-            }
-        }
+    // ---- Fallback: same rule, evaluated client-side.
+    var seen = {};
+    var pool = [];
+    function consider(b) {
+        if (!b || b.build_number == null || !b.timestamp) return;
+        if (seen[b.build_number]) return;
+        seen[b.build_number] = true;
+        pool.push({
+            status: b.status,
+            timestamp: new Date(b.timestamp),
+            buildNum: b.build_number,
+        });
     }
-
-    // Fallback: add builds from three_run_context (latest, previous, last_passed) if not already seen
+    if (Array.isArray(job.recent_builds)) job.recent_builds.forEach(consider);
     var ctx = job.three_run_context || {};
-    var ctxEntries = [ctx.latest, ctx.previous, ctx.last_passed];
-    for (var j = 0; j < ctxEntries.length; j++) {
-        var entry = ctxEntries[j];
-        if (entry && entry.timestamp && entry.build_number != null && !seen[entry.build_number]) {
-            seen[entry.build_number] = true;
-            builds.push({
-                status: entry.status,
-                timestamp: new Date(entry.timestamp),
-                buildNum: entry.build_number,
-            });
-        }
-    }
+    [ctx.latest, ctx.previous, ctx.last_passed].forEach(consider);
 
-    // Keep only builds that happened after the promotion time
-    var postRelease = builds.filter(function(b) {
+    var postRelease = pool.filter(function(b) {
         return !isNaN(b.timestamp.getTime()) && b.timestamp > promotionTime;
     });
-
     if (postRelease.length === 0) return 'not_executed';
 
-    // Check if at least one build succeeded (validation = passed) or if any are running
-    var hasPass = false;
-    var hasRunning = false;
-    for (var k = 0; k < postRelease.length; k++) {
-        if (postRelease[k].status === 'SUCCESS') { hasPass = true; break; }
-        if (postRelease[k].status === 'IN_PROGRESS') hasRunning = true;
+    var hasPass = false, hasRunning = false;
+    for (var i = 0; i < postRelease.length; i++) {
+        if (postRelease[i].status === 'SUCCESS') { hasPass = true; break; }
+        if (postRelease[i].status === 'IN_PROGRESS') hasRunning = true;
     }
-
-    if (hasPass) {
-        // Cache the validated state so it persists even if the passing build leaves the recent_builds window
-        _validationCache.set(jobId, {
-            promoKey: pk,
-            status: 'passed',
-            validatedAt: new Date()
-        });
-        return 'passed';
-    }
+    if (hasPass) return 'passed';
     if (hasRunning) return 'in_progress';
     return 'failed';
 }
+
+// Backwards-compatible no-ops so older call sites that reference the latch
+// cache do not break.  Retire after the dashboard tree is cleaned up.
+function clearValidationCache() { /* no-op: backend is now the source of truth */ }
 
 // Generate HTML badge element for a regression status (validated, needs rerun, running, or not run)
 function renderRegressionBadge(regressionStatus) {
@@ -120,12 +79,60 @@ function renderRegressionCell(job) {
 
 // Promotion Time Accessors
 
+const _PROMO_STORE_KEY = 'promotion_times';
+
+function _currentEnv() {
+    return (window.appState && appState._selectedEnvironment) ? appState._selectedEnvironment : '';
+}
+
+function _readPromoStore() {
+    try { return JSON.parse(sessionStorage.getItem(_PROMO_STORE_KEY) || '{}') || {}; }
+    catch (_) { return {}; }
+}
+
+function _writePromoStore(store) {
+    try { sessionStorage.setItem(_PROMO_STORE_KEY, JSON.stringify(store)); }
+    catch (_) { /* sessionStorage may be unavailable; ignore */ }
+}
+
+// Persist the current input value under the active environment.
+function _persistCurrentEnvValue(value) {
+    const env = _currentEnv();
+    if (!env) return;
+    const store = _readPromoStore();
+    if (value) store[env] = value;
+    else delete store[env];
+    _writePromoStore(store);
+}
+
+// Load the saved promotion value for the active environment into the input.
+// Called by config.js after an environment switch.
+function loadPromotionTimeForCurrentEnv() {
+    const input = document.getElementById('promotion-datetime');
+    if (!input) return;
+    const env = _currentEnv();
+    const stored = env ? (_readPromoStore()[env] || '') : '';
+    input.value = stored;
+    _appliedPromoValue = stored;
+    _clearPromoPending();
+    applyPromotionTime();
+}
+
 // Get the currently selected promotion datetime from the input field, or null if not set
 function getPromotionTime() {
     const input = document.getElementById('promotion-datetime');
     if (!input || !input.value) return null;
     const d = new Date(input.value);
     return isNaN(d.getTime()) ? null : d;
+}
+
+// Serialize the currently selected promotion time as an ISO-8601 string for
+// the backend.  Returns '' when no time is set.  Single seam used by every
+// fetch payload constructor — keep this and the backend's _parse_promotion_time
+// in lockstep.
+function getPromotionTimeISO() {
+    const d = getPromotionTime();
+    return d ? d.toISOString() : '';
 }
 
 // Set promotion time to a quick preset (now minus minutesAgo) and apply immediately
@@ -235,10 +242,8 @@ function applyPromotionTime() {
     var input = document.getElementById('promotion-datetime');
     _appliedPromoValue = input ? input.value : '';
 
-    // If promotion time changed, clear validation cache so jobs are re-evaluated fresh
-    var oldKey = appState.promotionTime ? _promoKey(appState.promotionTime) : '';
-    var newKey = promotionTime ? _promoKey(promotionTime) : '';
-    if (oldKey !== newKey) clearValidationCache();
+    // Persist under the current environment so switching contexts restores it.
+    _persistCurrentEnvValue(_appliedPromoValue);
 
     appState.promotionTime = promotionTime;
 
@@ -247,15 +252,25 @@ function applyPromotionTime() {
     const summaryStrip = document.getElementById('promo-summary-strip');
     const actionRow = document.getElementById('promo-action-row');
 
+    // Show/hide the Release Status filter dropdown alongside the column.
+    var releaseFilter = document.getElementById('filter-release-status');
     if (promotionTime) {
         table.classList.add('promotion-active');
         clearBtn.classList.remove('hidden');
+        if (releaseFilter) releaseFilter.classList.remove('hidden');
     } else {
         table.classList.remove('promotion-active');
         clearBtn.classList.add('hidden');
         summaryStrip.classList.add('hidden');
         actionRow.classList.add('hidden');
         clearValidationCache();
+        if (releaseFilter) {
+            releaseFilter.value = '';
+            releaseFilter.classList.add('hidden');
+        }
+        // Drop any stored release-status filter so applyFilters() doesn't
+        // continue suppressing rows after the column disappears.
+        if (appState && appState.filters) appState.filters.releaseStatus = null;
         // Uncheck category filters when clearing promotion
         const cbNotRun = document.getElementById('promo-cat-notrun');
         const cbFailed = document.getElementById('promo-cat-failed');

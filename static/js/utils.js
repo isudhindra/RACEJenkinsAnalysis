@@ -2,7 +2,7 @@
 // Every other module relies on these; keep them dependency-free.
 'use strict';
 
-// ── DOM shorthand helpers ──────────────────────────────────────────────
+// ── DOM shorthand helpers
 // These keep repeated getElementById / classList calls concise across the codebase.
 function $id(id) { return document.getElementById(id); }
 function show(id) { const el = $id(id); if (el) el.classList.remove('hidden'); }
@@ -19,9 +19,6 @@ function renderMetricValue(value, hasMetrics, colorClass) {
     if (value === 0) return '<span class="cell-metric-muted">0</span>';
     return '<span class="' + colorClass + '">' + value + '</span>';
 }
-
-
-// ── Time formatting ────────────────────────────────────────────────────
 
 // Turn an ISO timestamp into a human-readable "25 Mar 2026, 09:49:30" string
 // with a relative-time tooltip (e.g. "3 hours ago").
@@ -92,10 +89,7 @@ function renderConfidenceBadge(confidence) {
     return badge.replace('>', ` title="${tooltips[confidence] || ''}">`);
 }
 
-// ── Counter animation ──────────────────────────────────────────────────
-
-// Animate a KPI number from its current value to a new target over 400 ms.
-// Uses ease-out cubic for a smooth deceleration feel.
+// ── Counter animation 
 function animateCounterRoll(el, target) {
     // Cancel any in-flight animation for this element to prevent
     // compounding race conditions where intermediate values become

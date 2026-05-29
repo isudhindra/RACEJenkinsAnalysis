@@ -1,5 +1,9 @@
 # rules-bootstrap
 
+> **Canonical rules file lives at `config/rules.yaml`** (hand-edited).
+> This directory is a one-shot generator for seeding a new project — it is NOT a sync source.
+> Do not commit a `rules.yaml` here; if `bootstrap_rules.py` writes one, move it to `config/rules.yaml` and discard.
+
 One-time utility that generates a starter `rules.yaml` from real error samples, removing the manual effort of building classification rules from scratch when onboarding a new project.
 
 ## How it works

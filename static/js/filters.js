@@ -871,6 +871,10 @@ function updateLaActiveItem(items) {
 function applyFilters() {
     appState.filters.status = document.getElementById('filter-status').value || null;
     appState.filters.searchText = document.getElementById('filter-search').value.toLowerCase() || '';
+    // Release Status filter — only meaningful when the column is visible (promotion-active).
+    // When hidden, the input is unreachable so the value is naturally null.
+    var releaseSel = document.getElementById('filter-release-status');
+    appState.filters.releaseStatus = (releaseSel && releaseSel.value) ? releaseSel.value : null;
     // logAnalysisLabel is set directly by the autocomplete — no DOM read needed
 
     const rows = Array.from(document.querySelectorAll('tbody tr[data-job-id]:not(.detail-row)'));
@@ -912,6 +916,11 @@ function applyFilters() {
 // Check if a job matches all currently active filters
 function matchesFilters(job) {
     if (appState.filters.status && job.latest_status !== appState.filters.status) return false;
+
+    // Release Status filter — backend emits 'PASS' / 'PENDING' / 'FAIL' / 'NA'.
+    // We never offer 'NA' in the dropdown because the filter is only shown when
+    // a promotion time is set, in which case no job should be NA.
+    if (appState.filters.releaseStatus && job.release_status !== appState.filters.releaseStatus) return false;
 
     if (appState.filters.searchText) {
         const searchText = appState.filters.searchText;

@@ -1,14 +1,3 @@
-"""
-Analysis Pipeline — Classification + Orchestration
-
-Combines the deterministic failure classification engine with the two-stage
-fetch/analysis orchestrator. This module owns the full pipeline: normalize
-console text, classify failures, extract error logs, parse test metrics,
-and coordinate parallel job processing via ThreadPoolExecutor.
-
-Classification pipeline: normalize → evaluate → primary → secondary → confidence.
-Analysis pipeline:       Stage 1 (all jobs, metadata) → Stage 2 (failed only, classification).
-"""
 
 import re
 from typing import Callable, Dict, List, Optional, Tuple
@@ -657,6 +646,7 @@ class AnalysisOrchestrator:
         client: JenkinsClient,
         classifier: Classifier,
         max_workers: int = 15,
+        promotion_time: Optional[datetime] = None,
     ) -> None:
         """
         Initialize the AnalysisOrchestrator.
@@ -665,10 +655,16 @@ class AnalysisOrchestrator:
             client: JenkinsClient instance for API interactions.
             classifier: Classifier instance for failure classification.
             max_workers: Maximum number of worker threads (default: 15).
+            promotion_time: Optional release-promotion cutoff. When set, every
+                JobRecord serialized by this orchestrator's SSE callbacks will
+                include a ``release_status`` field derived from this time.
+                Threaded through ``to_dict(promotion_time=...)`` so there is
+                exactly one place that knows the release-validation rule.
         """
         self.client = client
         self.classifier = classifier
         self.max_workers = max_workers
+        self.promotion_time = promotion_time
         # Internal record store — maps job_url to JobRecord for Stage 2 access
         self._records: Dict[str, JobRecord] = {}
 
@@ -718,7 +714,7 @@ class AnalysisOrchestrator:
                         event_type=SSEEventType.JOB_METADATA,
                         job_id=record.job_url,
                         operation_id=operation_id,
-                        payload=record.to_dict(),
+                        payload=record.to_dict(promotion_time=self.promotion_time),
                     )
                     on_result(metadata_event)
 
@@ -818,7 +814,7 @@ class AnalysisOrchestrator:
                     event_type=SSEEventType.JOB_ENRICHED,
                     job_id=record.job_url,
                     operation_id=operation_id,
-                    payload=record.to_dict(),
+                    payload=record.to_dict(promotion_time=self.promotion_time),
                 )
                 on_result(enriched_event)
 
@@ -938,27 +934,42 @@ class AnalysisOrchestrator:
                     metrics_unavailable=True,
                 )
 
-        # 4. Fetch recent build history (single API call replaces individual
-        #    fetch_build_info + find_last_passed_build calls).
-        #    Returns up to 5 most recent builds, newest-first.
+        # 4. Fetch recent build history. The display contract is:
+        #      "latest pass + 2 most recent runs"
+        #    so we only need 3 recent builds for the row. ``last_passed``
+        #    may be older than that window, so we look it up separately
+        #    using a single deep walkback query (up to 50 builds).
         recent_builds = []
         try:
-            recent_builds = self.client.fetch_recent_builds(job_url, count=5)
+            recent_builds = self.client.fetch_recent_builds(job_url, count=3)
         except JenkinsClientError:
             pass  # Silently skip — context will be partial
 
-        # Derive previous and last_passed from recent_builds
+        # Derive ``previous`` from the recent window — first non-latest entry.
         previous = None
-        last_passed = None
         for rb in recent_builds:
             if rb.build_number == latest.build_number:
-                continue  # skip latest itself
-            if previous is None:
-                previous = rb  # first non-latest build is "previous"
-            if rb.status == BuildStatus.SUCCESS and last_passed is None:
-                last_passed = rb
-            if previous is not None and last_passed is not None:
-                break  # both found
+                continue
+            previous = rb
+            break
+
+        # Find ``last_passed`` deterministically: if the latest run is itself
+        # a SUCCESS, that's it; otherwise scan the recent window first (cheap)
+        # and fall back to a single allBuilds{0,50} query so jobs whose last
+        # green is older than the 3-run window still resolve correctly.
+        last_passed = None
+        if latest.status == BuildStatus.SUCCESS:
+            last_passed = latest
+        else:
+            for rb in recent_builds:
+                if rb.status == BuildStatus.SUCCESS:
+                    last_passed = rb
+                    break
+            if last_passed is None:
+                try:
+                    last_passed = self.client.fetch_last_passed(job_url, depth=50)
+                except JenkinsClientError:
+                    pass  # Silently skip — last_passed stays None
 
         # 5. Construct ThreeRunContext (backwards-compatible)
         context = ThreeRunContext(

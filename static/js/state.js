@@ -10,7 +10,8 @@ window.appState = {
     filters: {
         status: null,              // active status filter (e.g. 'FAILURE') or null for all
         searchText: '',            // free-text search query from the toolbar input
-        logAnalysisLabel: null     // selected log-analysis label filter
+        logAnalysisLabel: null,    // selected log-analysis label filter
+        releaseStatus: null        // active release-status filter ('PASS'/'PENDING'/'FAIL') or null
     },
     // Sort state is managed by module-scoped currentSortKey/currentSortDir
     selectedJobs: new Set(),       // job IDs the user has checked for bulk actions
