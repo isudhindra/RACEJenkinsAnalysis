@@ -63,6 +63,22 @@ class DataCompleteness(str, Enum):
     FETCH_ERROR = "FETCH_ERROR"
 
 
+class ReleaseStatus(str, Enum):
+    """
+    Validation status of a job against a release promotion time.
+
+    PASS    — at least one run after promotion_time succeeded. Latched —
+              a later failure does not flip this back.
+    PENDING — promotion_time is set but no run has occurred after it yet.
+    FAIL    — runs occurred after promotion_time and none succeeded.
+    NA      — no promotion_time was provided (release validation disabled).
+    """
+    PASS = "PASS"
+    PENDING = "PENDING"
+    FAIL = "FAIL"
+    NA = "NA"
+
+
 # ============================================================================
 # DATACLASSES
 # ============================================================================
@@ -217,12 +233,80 @@ class JobRecord:
     error_message: Optional[str] = None
     _console_text: Optional[str] = field(default=None, repr=False)
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to a dictionary suitable for JSON serialization."""
+    def compute_release_status(
+        self,
+        promotion_time: Optional[datetime] = None,
+    ) -> "ReleaseStatus":
+        """Derive the release-validation status for this job.
+
+        Single source of truth for the "passed after promotion" rule:
+
+        * No ``promotion_time`` → ``NA`` (release validation disabled).
+        * No build in ``recent_builds`` is newer than ``promotion_time``
+          → ``PENDING`` (the release hasn't been validated yet for this job).
+        * Any post-promotion build succeeded → ``PASS`` (latched — later
+          failures intentionally do not flip this).
+        * Post-promotion builds exist but none succeeded → ``FAIL``.
+
+        Args:
+            promotion_time: Cutoff datetime. Only builds with
+                ``timestamp > promotion_time`` are considered.
+
+        Returns:
+            ReleaseStatus enum value.
+        """
+        if promotion_time is None:
+            return ReleaseStatus.NA
+
+        # Build timestamps in this codebase are always naive (constructed via
+        # ``datetime.fromtimestamp(...)`` in jenkins_client).  If a caller
+        # hands us a tz-aware ``promotion_time`` (e.g. from a browser that
+        # sent an ISO-with-Z string), strip the tz so the comparison below
+        # doesn't raise.  Both sides are then interpreted in the same naive
+        # timezone — the caller's responsibility to keep them consistent.
+        if promotion_time.tzinfo is not None:
+            promotion_time = promotion_time.replace(tzinfo=None)
+
+        # Pool every build we know about for this job and dedupe by number.
+        # Sources: ``recent_builds`` (last 3) AND the three-run context
+        # (latest / previous / last_passed).  ``last_passed`` is critical —
+        # it may be older than the recent window but still newer than the
+        # promotion cutoff, in which case the job has already passed
+        # validation and must NOT be reported as FAIL.
+        pool: Dict[int, "BuildInfo"] = {}
+        for b in (self.recent_builds or []):
+            pool[b.build_number] = b
+        if self.three_run_context:
+            for b in (self.three_run_context.latest,
+                      self.three_run_context.previous,
+                      self.three_run_context.last_passed):
+                if b is not None:
+                    pool.setdefault(b.build_number, b)
+
+        post_promo = [b for b in pool.values() if b.timestamp > promotion_time]
+        if not post_promo:
+            return ReleaseStatus.PENDING
+        if any(b.status == BuildStatus.SUCCESS for b in post_promo):
+            return ReleaseStatus.PASS
+        return ReleaseStatus.FAIL
+
+    def to_dict(
+        self,
+        promotion_time: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Convert to a dictionary suitable for JSON serialization.
+
+        Args:
+            promotion_time: Optional release-promotion cutoff. When provided
+                the response includes a ``release_status`` field derived via
+                :meth:`compute_release_status`. The ``current_status`` field
+                continues to reflect the latest build regardless.
+        """
         result = {
             "job_name": self.job_name,
             "job_url": self.job_url,
             "current_status": self.current_status.value if isinstance(self.current_status, BuildStatus) else self.current_status,
+            "release_status": self.compute_release_status(promotion_time).value,
             "health_state": self.health_state.value if isinstance(self.health_state, HealthState) else self.health_state,
             "last_refreshed_at": self.last_refreshed_at.isoformat(),
             "stage": self.stage.value if isinstance(self.stage, StageCompletion) else self.stage,

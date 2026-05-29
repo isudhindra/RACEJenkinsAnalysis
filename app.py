@@ -6,6 +6,7 @@ Implements SSE streaming, job state management, and API routes.
 import json
 import os
 import queue
+import re
 import threading
 import time
 import uuid
@@ -54,6 +55,49 @@ def _create_client(data: dict, *, timeout: int = 30) -> JenkinsClient:
     )
 
 
+# Matches any "scheme://user:token@host" segment in an exception string so
+# credentials accidentally baked into a URL never leak into a JSON error body.
+_CREDS_IN_URL_RE = re.compile(r"://[^/@\s]+@")
+
+
+def _safe_err(e: Exception) -> str:
+    """Stringify an exception with embedded credentials redacted.
+
+    All ``jsonify({"error": str(e)})`` sites route through this helper so
+    that a single seam controls what reaches the browser.
+    """
+    return _CREDS_IN_URL_RE.sub("://[REDACTED]@", str(e))
+
+
+def _parse_promotion_time(data: dict) -> Optional[datetime]:
+    """Parse an ISO-8601 ``promotion_time`` from a request body.
+
+    The frontend uses ``Date.prototype.toISOString()`` which always emits a
+    trailing ``Z`` (UTC) and millisecond precision — e.g.
+    ``"2026-05-28T08:00:00.000Z"``.  Python 3.10's ``fromisoformat`` does
+    NOT accept ``Z`` natively (3.11+ does), so without normalization the
+    backend would silently drop every browser-supplied promotion time and
+    disable release validation across the board.
+
+    We normalize to a naive datetime so it can be compared directly with
+    Jenkins build timestamps (which are naive, from ``datetime.fromtimestamp``).
+    """
+    raw = (data.get("promotion_time") or "").strip()
+    if not raw:
+        return None
+    # Strip trailing Z and convert to "+00:00" so 3.10 fromisoformat accepts it.
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+    # Drop tz info — all build timestamps are naive in this codebase.
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
+    return dt
+
+
 def _resolve_credentials(data: dict) -> dict:
     """Return a copy of *data* with env credentials substituted when the
     API token matches the env-auth placeholder.  This allows every existing
@@ -62,7 +106,7 @@ def _resolve_credentials(data: dict) -> dict:
     token = data.get("api_token", "")
     if token == _ENV_AUTH_PLACEHOLDER:
         env_user = os.environ.get("JENKINS_NP_USERNAME", "").strip()
-        env_key = os.environ.get("JENKINS_NP_API_KEY", "").strip()
+        env_key = os.environ.get("JENKINS_NP_API_KEY1", "").strip()
         if env_user and env_key:
             resolved = dict(data)
             resolved["username"] = env_user
@@ -193,6 +237,16 @@ def _load_contexts_json() -> dict:
 def register_routes(app: Flask) -> None:
     """Register all API routes and static routes."""
 
+    # Asset cache-buster — bound to the server start time.  Every static JS
+    # / CSS link in the template appends ?v={{ asset_v }}, so a server
+    # restart forces the browser to refetch all bundles instead of serving
+    # stale cached copies after a deploy.
+    _ASSET_VERSION = str(int(time.time()))
+
+    @app.context_processor
+    def _inject_asset_version():
+        return {"asset_v": _ASSET_VERSION}
+
     @app.route("/", methods=["GET"])
     def dashboard():
         """Serve dashboard.html with contexts config and analysis taxonomy."""
@@ -218,13 +272,13 @@ def register_routes(app: Flask) -> None:
             else:
                 return jsonify({"valid": False, "message": "Invalid credentials or Jenkins unreachable"}), 200
         except Exception as e:
-            return jsonify({"valid": False, "message": str(e)}), 200
+            return jsonify({"valid": False, "message": _safe_err(e)}), 200
 
     @app.route("/api/env-credentials-check", methods=["GET"])
     def env_credentials_check():
-        """Check whether JENKINS_NP_USERNAME and JENKINS_NP_API_KEY are present and non-empty."""
+        """Check whether JENKINS_NP_USERNAME and JENKINS_NP_API_KEY1 are present and non-empty."""
         username = os.environ.get("JENKINS_NP_USERNAME", "").strip()
-        api_key = os.environ.get("JENKINS_NP_API_KEY", "").strip()
+        api_key = os.environ.get("JENKINS_NP_API_KEY1", "").strip()
         available = bool(username and api_key)
         return jsonify({"available": available}), 200
 
@@ -237,7 +291,7 @@ def register_routes(app: Flask) -> None:
             return jsonify({"valid": False, "message": "Jenkins URL is required"}), 200
 
         username = os.environ.get("JENKINS_NP_USERNAME", "").strip()
-        api_key = os.environ.get("JENKINS_NP_API_KEY", "").strip()
+        api_key = os.environ.get("JENKINS_NP_API_KEY1", "").strip()
         if not username or not api_key:
             return jsonify({"valid": False, "message": "Environment credentials are not available"}), 200
 
@@ -256,7 +310,7 @@ def register_routes(app: Flask) -> None:
             else:
                 return jsonify({"valid": False, "message": "Environment credentials rejected by Jenkins"}), 200
         except Exception as e:
-            return jsonify({"valid": False, "message": str(e)}), 200
+            return jsonify({"valid": False, "message": _safe_err(e)}), 200
 
     @app.route("/api/discover-views", methods=["POST"])
     def discover_views():
@@ -274,7 +328,7 @@ def register_routes(app: Flask) -> None:
 
             return jsonify({"views": views}), 200
         except Exception as e:
-            return jsonify({"views": [], "error": f"Failed to connect to Jenkins: {str(e)}"}), 200
+            return jsonify({"views": [], "error": f"Failed to connect to Jenkins: {_safe_err(e)}"}), 200
 
     @app.route("/api/discover-view-jobs-count", methods=["POST"])
     def discover_view_jobs_count():
@@ -308,7 +362,7 @@ def register_routes(app: Flask) -> None:
 
             return jsonify({"count": count, "view_name": view_name}), 200
         except Exception as e:
-            return jsonify({"count": 0, "error": str(e)}), 200
+            return jsonify({"count": 0, "error": _safe_err(e)}), 200
 
     @app.route("/api/load-job-list", methods=["POST"])
     def load_job_list():
@@ -343,7 +397,7 @@ def register_routes(app: Flask) -> None:
         except json.JSONDecodeError as e:
             return jsonify({"error": f"Invalid JSON in job list: {e}", "jobs": []}), 400
         except Exception as e:
-            return jsonify({"error": str(e), "jobs": []}), 500
+            return jsonify({"error": _safe_err(e), "jobs": []}), 500
 
     @app.route("/api/fetch/stream", methods=["POST"])
     def fetch_stream():
@@ -395,7 +449,7 @@ def register_routes(app: Flask) -> None:
             try:
                 jobs = client.discover_jobs_from_view(view_url)
             except JenkinsClientError as exc:
-                err_msg = str(exc)
+                err_msg = _safe_err(exc)
                 def error_gen():
                     yield _format_sse({"event_type": "error", "message": err_msg, "operation_id": operation_id})
                 return Response(error_gen(), mimetype="text/event-stream")
@@ -422,6 +476,7 @@ def register_routes(app: Flask) -> None:
             client=client,
             classifier=app.classifier,
             max_workers=max_workers,
+            promotion_time=_parse_promotion_time(data),
         )
 
         def generator():
@@ -467,6 +522,7 @@ def register_routes(app: Flask) -> None:
             client=client,
             classifier=app.classifier,
             max_workers=max_workers,
+            promotion_time=_parse_promotion_time(data),
         )
 
         # Convert target job URLs to {"name": ..., "url": ...} dicts
@@ -505,10 +561,63 @@ def register_routes(app: Flask) -> None:
                 results.append({
                     "job_url": job_url,
                     "triggered": False,
-                    "error": str(e),
+                    "error": _safe_err(e),
                 })
 
         return jsonify({"results": results}), 200
+
+    @app.route("/api/poll-status", methods=["POST"])
+    def poll_status():
+        """Cheap background-poll endpoint for the auto-refresh feature.
+
+        Returns ONLY (build_number, status, timestamp) per requested job —
+        no console, no metrics, no classification.  The frontend diffs the
+        response against its last known state and fires a richer
+        ``/api/refresh-single`` only for jobs whose status or build_number
+        actually changed.
+
+        Expects:
+          { "job_urls": [...], "jenkins_url": "...", "username": "...", "api_token": "..." }
+        Returns:
+          { "statuses": [ {"job_url", "build_number", "status", "timestamp"}, ... ] }
+        Errors per-job are returned with status="ERROR" and a short message,
+        so a single bad job never blows up the whole sweep.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        data = _resolve_credentials(request.get_json() or {})
+        job_urls = data.get("job_urls", []) or []
+        if not isinstance(job_urls, list) or not job_urls:
+            return jsonify({"statuses": []}), 200
+
+        client = _create_client(data, timeout=app.config["default_timeout"])
+
+        def _one(url: str) -> dict:
+            try:
+                bi = client.fetch_build_info(url, "lastBuild")
+                return {
+                    "job_url": url,
+                    "build_number": bi.build_number,
+                    "status": bi.status.value if hasattr(bi.status, "value") else str(bi.status),
+                    "timestamp": bi.timestamp.isoformat(),
+                }
+            except Exception as e:
+                # Don't kill the whole sweep on one bad job.
+                return {
+                    "job_url": url,
+                    "build_number": None,
+                    "status": "ERROR",
+                    "timestamp": None,
+                    "error": _safe_err(e),
+                }
+
+        # Bounded concurrency so a 50-job view doesn't open 50 sockets at once.
+        out: List[dict] = []
+        workers = min(15, max(1, len(job_urls)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(_one, u) for u in job_urls]
+            for fut in as_completed(futures):
+                out.append(fut.result())
+        return jsonify({"statuses": out}), 200
 
     @app.route("/api/refresh-single", methods=["POST"])
     def refresh_single_job():
@@ -537,19 +646,21 @@ def register_routes(app: Flask) -> None:
             job_name = existing.job_name if existing else job_url.rstrip("/").split("/")[-1]
 
         try:
+            promotion_time = _parse_promotion_time(data)
             client = _create_client(data, timeout=app.config["default_timeout"])
             orchestrator = AnalysisOrchestrator(
                 client=client,
                 classifier=app.classifier,
                 max_workers=1,
+                promotion_time=promotion_time,
             )
 
             record = orchestrator.analyze_single_job(job_url, job_name)
             job_store[job_url] = record
 
-            return jsonify(record.to_dict()), 200
+            return jsonify(record.to_dict(promotion_time=promotion_time)), 200
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": _safe_err(e)}), 500
 
     @app.route("/api/analyze-on-demand", methods=["POST"])
     def analyze_on_demand():
@@ -564,19 +675,21 @@ def register_routes(app: Flask) -> None:
         api_token = data.get("api_token")
 
         try:
+            promotion_time = _parse_promotion_time(data)
             client = _create_client(data, timeout=app.config["default_timeout"])
             orchestrator = AnalysisOrchestrator(
                 client=client,
                 classifier=app.classifier,
                 max_workers=1,
+                promotion_time=promotion_time,
             )
 
             record = orchestrator.analyze_single_job(job_url, job_name)
             job_store[job_url] = record
 
-            return jsonify(record.to_dict()), 200
+            return jsonify(record.to_dict(promotion_time=promotion_time)), 200
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": _safe_err(e)}), 500
 
     @app.route("/api/console-log", methods=["POST"])
     def get_console_log():
@@ -621,9 +734,9 @@ def register_routes(app: Flask) -> None:
                 },
             )
         except JenkinsClientError as e:
-            return jsonify({"error": str(e)}), 502
+            return jsonify({"error": _safe_err(e)}), 502
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify({"error": _safe_err(e)}), 500
 
     @app.route("/api/config", methods=["GET"])
     def get_config():
@@ -800,12 +913,16 @@ def _stream_pipeline(
                 continue
 
             if event.event_type == SSEEventType.JOB_ENRICHED:
-                # Record was mutated in-place by orchestrator; re-serialize
+                # Record was mutated in-place by orchestrator; re-serialize.
+                # Pull promotion_time from the orchestrator so release_status
+                # stays consistent with the JOB_METADATA emit above.
                 if event.job_id in job_store:
                     yield _format_sse({
                         "event_type": "job_enriched",
                         "operation_id": event.operation_id,
-                        **job_store[event.job_id].to_dict(),
+                        **job_store[event.job_id].to_dict(
+                            promotion_time=orchestrator.promotion_time,
+                        ),
                     })
                 else:
                     yield _format_sse({
@@ -980,4 +1097,5 @@ if __name__ == "__main__":
     browser_thread.start()
 
     # Run Flask app
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    # Local tool: bind to loopback only. Do not expose on all interfaces.
+    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)

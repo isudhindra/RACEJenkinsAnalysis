@@ -203,7 +203,7 @@ async function checkEnvCredentials() {
             '<button class="cfg-btn cfg-btn-env" id="btn-env-authenticate" onclick="authenticateWithEnvCredentials()">' +
                 '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>Authenticate using Environment Variables' +
             '</button>' +
-            '<div class="env-auth-hint">Credentials sourced from <code>JENKINS_NP_USERNAME</code> and <code>JENKINS_NP_API_KEY</code>. The API key is never displayed.</div>' +
+            '<div class="env-auth-hint">Credentials sourced from <code>JENKINS_NP_USERNAME</code> and <code>JENKINS_NP_API_KEY1</code>. The API key is never displayed.</div>' +
             '<div class="env-auth-divider">or authenticate manually</div>';
 
         authActions.parentElement.insertBefore(section, authActions);
@@ -473,10 +473,14 @@ async function onJobListChange() {
         countEl.innerHTML = '<strong>' + data.count + ' jobs</strong> in ' + data.name;
         countEl.style.display = 'block';
 
-        // Derive environment
+        // Derive environment + restore that env's stored promotion time so
+        // the user gets their per-environment baseline back automatically.
         const selectedOption = select.options[select.selectedIndex];
         if (selectedOption.dataset.environment) {
             appState._selectedEnvironment = selectedOption.dataset.environment;
+            if (typeof loadPromotionTimeForCurrentEnv === 'function') {
+                loadPromotionTimeForCurrentEnv();
+            }
         }
 
         // Mark step complete

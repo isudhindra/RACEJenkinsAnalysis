@@ -1,20 +1,6 @@
-// motion.js — Premium animation orchestrator for the fetch-and-render experience.
-// Coordinates storytelling phases, KPI reveals, row entry staggering, and
-// state transitions to make the dashboard feel alive and intentional.
-// Inspired by Framer Motion spring physics, implemented in vanilla JS + CSS.
 'use strict';
 
-// ── Phase lifecycle ────────────────────────────────────────────────────
-//
-// The fetch flow tells a story in five phases:
-//   1. connecting   — establishing connection to Jenkins
-//   2. discovering   — discovering jobs in the view
-//   3. fetching      — pulling execution data and test metrics
-//   4. classifying   — analysing failures and classifying logs
-//   5. complete      — insights are ready, workspace settles
-//
-// Each phase drives the narrative strip, KPI reveal timing, and row entry feel.
-
+// ── Phase lifecycle 
 var _motion = {
     phase: 'idle',          // current storytelling phase
     phaseStartTime: 0,      // when the current phase began (performance.now)
@@ -102,8 +88,6 @@ function motionReset() {
         kpiContainer.classList.remove('kpi-waiting', 'kpi-revealed', 'kpi-settling');
     }
 }
-
-// ── KPI reveal ─────────────────────────────────────────────────────────
 
 // Trigger the KPI panel reveal animation when the first meaningful data arrives.
 // Called from updateSummaryBar after jobs are loaded.

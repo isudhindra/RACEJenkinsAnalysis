@@ -4,9 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JAEH — Jenkins Analysis & Execution Hub</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Typography is set by dashboard-theme.css (Arial fallback).
+         Google Fonts removed to drop two render-blocking requests. -->
     <style>
         /* ========== RESET & BASE ========== */
         * {
@@ -4633,6 +4632,9 @@
         .diag-resize:hover { background: rgba(137,180,250,0.2); }
 
     </style>
+    <!-- Dashboard theme overlay. Loaded last so it cascades over the inline
+         styles above. Remove this <link> to revert to the original look. -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard-theme.css') }}">
 </head>
 <body>
     <!-- SVG Icon Sprite Sheet (HTML item 23) -->
@@ -5038,6 +5040,34 @@
                 <!-- Left: Command Actions -->
                 <div class="ops-group ops-group--actions">
                     <button class="ops-btn ops-btn-view" data-fv-disable onclick="switchViewMode(appState.viewMode === 'summary' ? 'detail' : 'summary')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span id="view-mode-label">Detail</span></button>
+                    <!-- Auto-refresh toggle: polls /api/poll-status every 30s -->
+                    <button class="ops-btn ops-btn-secondary auto-refresh-on" id="btn-auto-refresh"
+                            onclick="toggleAutoRefresh()" type="button"
+                            aria-pressed="true"
+                            title="Background poll every 30 seconds for status changes (rerun results, builds triggered elsewhere). Toggle on/off.">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        <span class="btn-auto-refresh-label">Auto-refresh: ON</span>
+                    </button>
+                    <!-- Select: one-click bulk selection by category -->
+                    <div class="ops-dropdown" id="ops-select-dropdown" data-fv-disable>
+                        <button class="ops-btn ops-btn-secondary ops-dropdown-trigger" onclick="openSelectDropdown()" type="button" title="Quickly select multiple jobs by status or category">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                            Select
+                            <svg class="ops-dropdown-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                        <div class="ops-dropdown-menu" id="ops-select-menu">
+                            <button class="ops-dropdown-item" onclick="selectByCategory('visible'); closeOpsDropdowns()">All Visible <span class="ops-dropdown-count" id="sel-count-visible"></span></button>
+                            <div class="ops-dropdown-divider"></div>
+                            <button class="ops-dropdown-item" onclick="selectByCategory('failed'); closeOpsDropdowns()">All Failed <span class="ops-dropdown-count" id="sel-count-failed"></span></button>
+                            <button class="ops-dropdown-item" onclick="selectByCategory('unstable'); closeOpsDropdowns()">All Unstable <span class="ops-dropdown-count" id="sel-count-unstable"></span></button>
+                            <button class="ops-dropdown-item" onclick="selectByCategory('aborted'); closeOpsDropdowns()">All Aborted <span class="ops-dropdown-count" id="sel-count-aborted"></span></button>
+                            <div class="ops-dropdown-divider promo-only" id="sel-promo-divider" style="display:none"></div>
+                            <button class="ops-dropdown-item promo-only" id="sel-needs-rerun" style="display:none" onclick="selectByCategory('needs_rerun'); closeOpsDropdowns()">All Needs Rerun <span class="ops-dropdown-count" id="sel-count-needs-rerun"></span></button>
+                            <button class="ops-dropdown-item promo-only" id="sel-pending" style="display:none" onclick="selectByCategory('pending'); closeOpsDropdowns()">All Pending <span class="ops-dropdown-count" id="sel-count-pending"></span></button>
+                            <div class="ops-dropdown-divider"></div>
+                            <button class="ops-dropdown-item" onclick="selectByCategory('clear'); closeOpsDropdowns()">Clear Selection</button>
+                        </div>
+                    </div>
                     <!-- Refresh: grouped dropdown menu -->
                     <div class="ops-dropdown" id="ops-refresh-dropdown" data-fv-disable>
                         <button class="ops-btn ops-btn-secondary ops-dropdown-trigger" onclick="toggleOpsDropdown('ops-refresh-dropdown')"><svg width="13" height="13"><use href="#icon-rotate-cw"/></svg>Refresh<svg class="ops-dropdown-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></button>
@@ -5069,6 +5099,14 @@
                         <option value="UNSTABLE">Unstable</option>
                         <option value="ABORTED">Aborted</option>
                         <option value="IN_PROGRESS">In Progress</option>
+                    </select>
+                    <!-- Release Status filter — visible only when a promotion time is active
+                         (mirrors the Release Status column's visibility rule). -->
+                    <select id="filter-release-status" class="ops-select release-status-filter hidden" onchange="applyFilters()" title="Filter by release validation state">
+                        <option value="">All Release Status</option>
+                        <option value="PASS">Pass</option>
+                        <option value="PENDING">Pending</option>
+                        <option value="FAIL">Fail</option>
                     </select>
                     <!-- Log Analysis filter — visible only in Detail mode -->
                     <div class="la-filter-wrap" id="la-filter-wrap" style="display:none">
@@ -5177,7 +5215,7 @@
                             <input type="checkbox" id="select-all-checkbox" onchange="toggleSelectAll(this.checked)" aria-label="Select all jobs" />
                         </th>
                         <th class="col-job-name" data-sortable data-sort-key="name" data-sort-type="text" data-resizable><span class="th-sort-wrap"><span class="th-sort-label">Job Name</span><span class="th-sort-icon">⇅</span></span></th>
-                        <th class="col-status" data-sortable data-sort-key="status" data-sort-type="text"><span class="th-sort-wrap"><span class="th-sort-label">Status</span><span class="th-sort-icon">⇅</span></span></th>
+                        <th class="col-status" data-sortable data-sort-key="status" data-sort-type="text"><span class="th-sort-wrap"><span class="th-sort-label" title="Latest build result, regardless of promotion time">Current Status</span><span class="th-sort-icon">⇅</span></span></th>
                         <th class="col-actions">Actions</th>
                         <th class="col-metric" data-sortable data-sort-key="total" data-sort-type="number"><span class="th-sort-wrap"><span class="th-sort-label">Total</span><span class="th-sort-icon">⇅</span></span></th>
                         <th class="col-metric" data-sortable data-sort-key="passed" data-sort-type="number"><span class="th-sort-wrap"><span class="th-sort-label">Passed</span><span class="th-sort-icon">⇅</span></span></th>
@@ -5335,19 +5373,21 @@
         </div>
     </div>
     <!-- JavaScript Modules (extracted from inline script) -->
-    <script src="{{ url_for('static', filename='js/state.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/diagnostics.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/motion.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/rendering.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/filters.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/streaming.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/config.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/toolbar.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/promotion.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/kpi.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/clv.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/state.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/utils.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/diagnostics.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/motion.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/rendering.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/filters.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/streaming.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/config.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/toolbar.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/promotion.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/kpi.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/clv.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/auto-refresh.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/selection-enhancements.js', v=asset_v) }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v=asset_v) }}"></script>
     <script>
     /* ========== INLINE BOOTSTRAP — Jinja2 server data + init ========== */
     document.addEventListener('DOMContentLoaded', function() {
