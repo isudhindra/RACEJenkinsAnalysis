@@ -31,7 +31,7 @@ and surfaces everything in one screen.<br>
 
 ## Prerequisites
 
-- **Python 3.10 or newer**
+- **Python 3.8 or newer**
 - A Jenkins instance you can reach over HTTPS
 - A Jenkins API token &nbsp;·&nbsp; *Jenkins → your user → Configure → API Token*
 

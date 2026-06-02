@@ -3,6 +3,24 @@
 
 'use strict';
 
+// Shared visibility helper
+function _runElapsedTimer(el, baseText, options) {
+    if (!el) return { stop: function () {} };
+    options = options || {};
+    var thresholdMs = options.thresholdMs || 5000;
+    var startedAt = Date.now();
+    el.textContent = baseText;
+    var intervalId = setInterval(function () {
+        var elapsed = Date.now() - startedAt;
+        if (elapsed >= thresholdMs) {
+            el.textContent = baseText + ' (' + Math.round(elapsed / 1000) + 's)';
+        }
+    }, 1000);
+    return {
+        stop: function () { clearInterval(intervalId); }
+    };
+}
+
 // Show or hide the configuration panel with a toggle animation
 function toggleConfigPanel() {
     const panel = document.getElementById('config-panel');
@@ -134,8 +152,10 @@ async function authenticateCredentials() {
     }
 
     const btn = document.getElementById('btn-authenticate');
-    btn.innerHTML = '<span class="cfg-spinner"></span> Validating...';
+    btn.innerHTML = '<span class="cfg-spinner"></span> <span class="cfg-btn-status">Connecting to Jenkins…</span>';
     btn.disabled = true;
+    const statusEl = btn.querySelector('.cfg-btn-status');
+    const timer = _runElapsedTimer(statusEl, 'Connecting to Jenkins…');
 
     try {
         const resp = await fetch('/api/validate', {
@@ -143,6 +163,7 @@ async function authenticateCredentials() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jenkins_url: jenkinsUrl, username, api_token: token })
         });
+        timer.stop();
         const data = await resp.json();
 
         if (data.valid) {
@@ -156,6 +177,7 @@ async function authenticateCredentials() {
             btn.disabled = false;
         }
     } catch (err) {
+        timer.stop();
         showError('cfg-auth-error', 'Connection error: ' + err.message);
         reportFetchError('Auth', 'Manual auth connection error', '/api/validate', err);
         btn.innerHTML = 'Authenticate';
@@ -227,8 +249,10 @@ async function authenticateWithEnvCredentials() {
 
     const btn = document.getElementById('btn-env-authenticate');
     const origHTML = btn.innerHTML;
-    btn.innerHTML = '<span class="cfg-spinner"></span> Validating...';
+    btn.innerHTML = '<span class="cfg-spinner"></span> <span class="cfg-btn-status">Connecting to Jenkins…</span>';
     btn.disabled = true;
+    const statusEl = btn.querySelector('.cfg-btn-status');
+    const timer = _runElapsedTimer(statusEl, 'Connecting to Jenkins…');
 
     try {
         const resp = await fetch('/api/env-validate', {
@@ -236,6 +260,7 @@ async function authenticateWithEnvCredentials() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jenkins_url: jenkinsUrl })
         });
+        timer.stop();
         const data = await resp.json();
 
         if (data.valid) {
@@ -252,6 +277,7 @@ async function authenticateWithEnvCredentials() {
             btn.disabled = false;
         }
     } catch (err) {
+        timer.stop();
         showError('cfg-auth-error', 'Connection error: ' + err.message + ' — use manual authentication below');
         reportFetchError('Auth', 'Env auth connection error', '/api/env-validate', err);
         btn.innerHTML = origHTML;
@@ -326,8 +352,13 @@ async function discoverViews(jenkinsUrl, username, token) {
     viewStep.classList.add('step-active');
 
     const viewSelect = document.getElementById('cfg-view-select');
-    viewSelect.innerHTML = '<option value="">Loading views from Jenkins...</option>';
+    viewSelect.innerHTML = '<option value="">Loading views from Jenkins…</option>';
     viewSelect.disabled = true;
+
+    // Elapsed-time visibility — if Jenkins is slow, the user sees "…(8s)"
+    // updating instead of a silent dropdown.
+    const loadingOption = viewSelect.options[0];
+    const viewsTimer = _runElapsedTimer(loadingOption, 'Loading views from Jenkins…');
 
     const instanceId = appState.selectedInstance ? appState.selectedInstance.id : '';
 
@@ -338,6 +369,7 @@ async function discoverViews(jenkinsUrl, username, token) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jenkins_url: jenkinsUrl, username, api_token: token })
         });
+        viewsTimer.stop();
         const data = await resp.json();
 
         viewSelect.innerHTML = '<option value="">Select a view...</option>';
@@ -362,6 +394,7 @@ async function discoverViews(jenkinsUrl, username, token) {
 
         viewSelect.disabled = false;
     } catch (err) {
+        viewsTimer.stop();
         viewSelect.innerHTML = '<option value="">Error loading views</option>';
         viewSelect.disabled = false;
         document.getElementById('cfg-view-error').textContent = 'Failed to load Jenkins views: ' + err.message;
@@ -573,8 +606,25 @@ async function onViewChange() {
     const resolved = resolveViewUrl(selectedPath);
     appState._resolvedViewUrl = resolved.viewUrl;
 
+    const viewStepEarly = document.getElementById('step-view');
+    viewStepEarly.classList.remove('step-active');
+    viewStepEarly.classList.add('step-complete');
+    const viewNameEarly = select.options[select.selectedIndex].text;
+    document.getElementById('view-badge').textContent = viewNameEarly;
+    document.getElementById('view-badge').style.display = '';
+    updateConfigChips();
+    updateFetchButton();
+
     // Validate view and get job count — send both view_path and view_url
     if (appState.authCredentials) {
+        // Show the count element immediately with a "Counting…" placeholder
+        // so users see something happening while Jenkins is queried.
+        const countEl = document.getElementById('view-job-count');
+        const viewName = select.options[select.selectedIndex].text;
+        countEl.textContent = 'Counting jobs in ' + viewName + '…';
+        countEl.style.display = 'block';
+        const countTimer = _runElapsedTimer(countEl, 'Counting jobs in ' + viewName + '…');
+
         try {
             const resp = await fetch('/api/discover-view-jobs-count', {
                 method: 'POST',
@@ -585,33 +635,24 @@ async function onViewChange() {
                     view_url: resolved.viewUrl
                 })
             });
+            countTimer.stop();
             const data = await resp.json();
 
             if (data.error) {
+                countEl.style.display = 'none';
                 document.getElementById('cfg-view-error').textContent = data.error;
                 document.getElementById('cfg-view-error').style.display = 'block';
                 return;
             }
 
-            const countEl = document.getElementById('view-job-count');
             countEl.innerHTML = '<strong>' + data.count + ' jobs</strong> in ' + (data.view_name || 'this view');
-            countEl.style.display = 'block';
         } catch (err) {
+            countTimer.stop();
+            countEl.style.display = 'none';
             // Non-blocking — just skip count display
         }
     }
 
-    // Mark view step complete
-    const viewStep = document.getElementById('step-view');
-    viewStep.classList.remove('step-active');
-    viewStep.classList.add('step-complete');
-
-    const viewName = select.options[select.selectedIndex].text;
-    document.getElementById('view-badge').textContent = viewName;
-    document.getElementById('view-badge').style.display = '';
-
-    updateConfigChips();
-    updateFetchButton();
 }
 
 // Reset the view selection step to locked state and clear all view-related selections

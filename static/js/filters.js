@@ -558,20 +558,9 @@ function initScrollAnimations() {
     }
 }
 
-// Observe a newly inserted row and mark it for scroll reveal if it's below the visible area
-function observeRowForScroll(row) {
-    if (!_scrollRowObserver) return;
-    const tableContainer = document.querySelector('.table-container');
-    if (!tableContainer) return;
 
-    const containerRect = tableContainer.getBoundingClientRect();
-    const rowRect = row.getBoundingClientRect();
-
-    // Only apply scroll-hidden to rows inserted below the visible area
-    if (rowRect.top > containerRect.bottom) {
-        row.classList.add('scroll-hidden');
-        _scrollRowObserver.observe(row);
-    }
+function observeRowForScroll(_row) {
+    return;
 }
 
 // ========== COLUMN RESIZING ==========
@@ -867,8 +856,37 @@ function updateLaActiveItem(items) {
     });
 }
 
-// Apply all active filters to show/hide table rows based on their matching status
+// Table-overlay helpers
+let _overlayRefCount = 0;
+function showTableOverlay() {
+    _overlayRefCount++;
+    const el = document.getElementById('table-overlay');
+    if (el) { el.classList.add('is-visible'); el.setAttribute('aria-hidden', 'false'); }
+}
+function hideTableOverlay() {
+    _overlayRefCount = Math.max(0, _overlayRefCount - 1);
+    if (_overlayRefCount > 0) return;
+    const el = document.getElementById('table-overlay');
+    if (el) { el.classList.remove('is-visible'); el.setAttribute('aria-hidden', 'true'); }
+}
+// Public-ish wrapper used by other modules
+function withTableLoading(work) {
+    showTableOverlay();
+    requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+            try { work(); }
+            finally { hideTableOverlay(); }
+        });
+    });
+}
+
+// Public entry point
 function applyFilters() {
+    withTableLoading(_applyFiltersImpl);
+}
+
+// Synchronous core — original behaviour
+function _applyFiltersImpl() {
     appState.filters.status = document.getElementById('filter-status').value || null;
     appState.filters.searchText = document.getElementById('filter-search').value.toLowerCase() || '';
     // Release Status filter — only meaningful when the column is visible (promotion-active).
