@@ -1,4 +1,4 @@
-<h1 align="center">JenkinsJobAnalysisTool</h1>
+<h1 align="center">JJAT - Jenkins Job Analysis Tool</h1>
 
 <p align="center">
 A local dashboard that pulls live job status from Jenkins, validates each job
