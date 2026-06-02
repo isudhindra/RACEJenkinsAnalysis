@@ -671,14 +671,14 @@ function showLogAnalysisFilter() {
 function hideLogAnalysisFilter() {
     var wrap = document.getElementById('la-filter-wrap');
     if (wrap) wrap.style.display = 'none';
+    var hadActive = (appState.filters.logAnalysisLabels || []).length > 0;
     clearLogAnalysisFilter();
-    if (appState.filters.logAnalysisLabel) {
-        appState.filters.logAnalysisLabel = null;
+    if (hadActive) {
         applyFilters();
     }
 }
 
-// Clear the log analysis filter input field and dropdown state
+// Clear ALL log analysis labels from the filter (multi-select).
 function clearLogAnalysisFilter() {
     var input = document.getElementById('la-filter-input');
     var clearBtn = document.getElementById('la-filter-clear');
@@ -688,7 +688,27 @@ function clearLogAnalysisFilter() {
     }
     if (clearBtn) clearBtn.style.display = 'none';
     closeLogAnalysisDropdown();
-    appState.filters.logAnalysisLabel = null;
+    appState.filters.logAnalysisLabels = [];
+    updateSelectedLabelBadge();
+}
+
+
+function updateSelectedLabelBadge() {
+    var badge = document.getElementById('la-filter-count');
+    var input = document.getElementById('la-filter-input');
+    var labels = appState.filters.logAnalysisLabels || [];
+    if (!badge) return;
+    if (labels.length === 0) {
+        badge.style.display = 'none';
+        badge.textContent = '';
+        badge.title = '';
+        if (input) input.classList.remove('la-has-value');
+        return;
+    }
+    badge.style.display = 'inline-block';
+    badge.textContent = String(labels.length);
+    badge.title = 'Filtering by ' + labels.length + ' label' + (labels.length === 1 ? '' : 's') + ':\n• ' + labels.join('\n• ');
+    if (input) input.classList.add('la-has-value');
 }
 
 // Open the log analysis dropdown and populate it with labels matching the query
@@ -703,7 +723,8 @@ function openLogAnalysisDropdown(query) {
     if (matches.length === 0) {
         dropdown.innerHTML = '<div class="la-dropdown-empty">No matching labels</div>';
     } else {
-        // Build dropdown items with highlighted search matches
+        // Build dropdown items with highlighted search matches.
+        var selected = appState.filters.logAnalysisLabels || [];
         dropdown.innerHTML = matches.map(function(item, idx) {
             var hex = _dotHexMap[item.color] || '#94A3B8';
             var display = escapeHtml(item.label);
@@ -718,7 +739,11 @@ function openLogAnalysisDropdown(query) {
                     display = before + '<span class="la-dropdown-match">' + match + '</span>' + after;
                 }
             }
-            return '<div class="la-dropdown-item' + (idx === 0 ? ' la-item-active' : '') + '" data-label="' + escapeHtml(item.label) + '" data-index="' + idx + '">'
+            var isSel = selected.indexOf(item.label) !== -1;
+            var cls = 'la-dropdown-item' + (idx === 0 ? ' la-item-active' : '') + (isSel ? ' la-item-selected' : '');
+            var check = isSel ? '<span class="la-item-check" aria-hidden="true">✓</span>' : '<span class="la-item-check" aria-hidden="true"></span>';
+            return '<div class="' + cls + '" data-label="' + escapeHtml(item.label) + '" data-index="' + idx + '">'
+                 + check
                  + '<span class="la-dropdown-item-dot" style="background:' + hex + '"></span>'
                  + '<span style="overflow:hidden;text-overflow:ellipsis">' + display + '</span>'
                  + '<span class="la-dropdown-item-count">' + item.count + '</span>'
@@ -738,15 +763,30 @@ function closeLogAnalysisDropdown() {
     _laVisibleItems = [];
 }
 
-// Select a label from the dropdown and apply it as a filter
+// Toggle a label in the multi-select filter.
 function selectLogAnalysisLabel(label) {
     var input = document.getElementById('la-filter-input');
     var clearBtn = document.getElementById('la-filter-clear');
-    input.value = label;
-    input.classList.add('la-has-value');
-    clearBtn.style.display = 'flex';
-    closeLogAnalysisDropdown();
-    appState.filters.logAnalysisLabel = label;
+    var labels = appState.filters.logAnalysisLabels || [];
+    var idx = labels.indexOf(label);
+    if (idx === -1) {
+        labels.push(label);
+    } else {
+        labels.splice(idx, 1);
+    }
+    appState.filters.logAnalysisLabels = labels;
+
+    // Clear any typed search so the dropdown re-renders showing all
+    // labels (the user is in "pick several" mode now).
+    if (input) {
+        input.value = '';
+        input.classList.toggle('la-has-value', labels.length > 0);
+    }
+    if (clearBtn) clearBtn.style.display = labels.length > 0 ? 'flex' : 'none';
+
+    updateSelectedLabelBadge();
+    // Re-open the dropdown so the user sees the updated check marks
+    openLogAnalysisDropdown('');
     applyFilters();
 }
 
@@ -768,16 +808,11 @@ var _laVisibleItems = [];
             openLogAnalysisDropdown(input.value);
         });
 
-        // Update dropdown as the user types
+        // Update dropdown as the user types.  Typing only filters the
+        // dropdown — it does NOT clear any selected labels.  Use the X
+        // button or click a chip's × to remove labels.
         input.addEventListener('input', function() {
             openLogAnalysisDropdown(input.value);
-            // If input was cleared, also clear the active filter
-            if (input.value.trim() === '' && appState.filters.logAnalysisLabel) {
-                appState.filters.logAnalysisLabel = null;
-                input.classList.remove('la-has-value');
-                clearBtn.style.display = 'none';
-                applyFilters();
-            }
         });
 
         // Handle arrow keys and Enter for dropdown navigation
@@ -844,6 +879,7 @@ var _laVisibleItems = [];
             rebuildLogAnalysisLabelCache();
             openLogAnalysisDropdown('');
         });
+
     });
 })();
 
@@ -909,7 +945,7 @@ function _applyFiltersImpl() {
     // When hidden, the input is unreachable so the value is naturally null.
     var releaseSel = document.getElementById('filter-release-status');
     appState.filters.releaseStatus = (releaseSel && releaseSel.value) ? releaseSel.value : null;
-    // logAnalysisLabel is set directly by the autocomplete — no DOM read needed
+    // logAnalysisLabels
 
     const rows = Array.from(document.querySelectorAll('tbody tr[data-job-id]:not(.detail-row)'));
     rows.forEach(row => {
@@ -969,15 +1005,17 @@ function matchesFilters(job) {
     }
 
     // Log Analysis label filter (Detail mode only)
-    if (appState.filters.logAnalysisLabel) {
+    const selLabels = appState.filters.logAnalysisLabels || [];
+    if (selLabels.length > 0) {
         const cls = job.classification;
         if (!cls) return false;
-        const target = appState.filters.logAnalysisLabel;
+        let hit = false;
         if (cls.all_labels && cls.all_labels.length > 0) {
-            if (!cls.all_labels.some(function(e) { return e.label === target; })) return false;
-        } else if (cls.label !== target) {
-            return false;
+            hit = cls.all_labels.some(function(e) { return selLabels.indexOf(e.label) !== -1; });
+        } else if (cls.label) {
+            hit = selLabels.indexOf(cls.label) !== -1;
         }
+        if (!hit) return false;
     }
 
     return true;

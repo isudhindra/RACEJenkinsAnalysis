@@ -67,18 +67,18 @@ function updateToolbarActions() {
     const refreshSelCount = document.getElementById('ops-refresh-sel-count');
     if (refreshSelCount) refreshSelCount.textContent = hasSelected ? selectedCount : '';
 
-    // Show/hide rerun buttons based on available job statuses
     showHide('ops-rerun-failed', hasFailed);
     showHide('ops-rerun-unstable', hasUnstable);
     showHide('ops-rerun-aborted', hasAborted);
     showHide('ops-rerun-selected', hasSelected);
+    showHide('ops-rerun-sel-divider', hasSelected && (hasFailed || hasUnstable || hasAborted));
 
     // Update rerun selected count badge
     const countBadge = document.getElementById('ops-selected-count');
     if (countBadge) countBadge.textContent = hasSelected ? selectedCount : '';
 
-    // Show separator only if any rerun button is visible
     const anyRerun = hasFailed || hasUnstable || hasAborted || hasSelected;
+    showHide('ops-rerun-dropdown', anyRerun);
     const sepRerun = document.getElementById('ops-sep-rerun');
     if (sepRerun) sepRerun.style.display = anyRerun ? '' : 'none';
 

@@ -2033,8 +2033,8 @@
         .ops-toolbar-row {
             display: flex;
             align-items: center;
-            gap: 6px;
-            padding: 8px 16px;
+            gap: 5px;
+            padding: 8px 14px;
             flex-wrap: wrap;
         }
         .ops-toolbar-row:not(:last-child) {
@@ -2052,8 +2052,21 @@
             flex-wrap: wrap;
         }
         .ops-group--filters {
-            margin-left: auto;
             flex: 0 0 auto;
+        }
+
+        .ops-toolbar-spacer {
+            flex: 1 1 0;
+            min-width: 0;
+            align-self: stretch;
+        }
+
+        @media (min-width: 1280px) and (max-width: 1500px) {
+            #btn-auto-refresh .btn-auto-refresh-label,
+            button[onclick="exportCSV()"] span,
+            #ops-failure-view-label {
+                display: none;
+            }
         }
 
         /* ---- Shared control base ---- */
@@ -2118,7 +2131,7 @@
         }
         .la-filter-input {
             padding: 0 28px 0 28px;
-            width: 180px;
+            width: 150px;
         }
         .la-filter-input.la-has-value {
             background: #EFF6FF;
@@ -2184,6 +2197,52 @@
         .la-dropdown-item-dot {
             width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
         }
+        /* Multi-select check column — empty box for unselected, ✓ for selected */
+        .la-item-check {
+            display: inline-block;
+            width: 12px; height: 12px;
+            line-height: 12px;
+            text-align: center;
+            font-size: 11px;
+            font-weight: 800;
+            color: var(--color-info);
+            flex-shrink: 0;
+            text-transform: none;
+        }
+        .la-dropdown-item.la-item-selected {
+            background: #EFF6FF;
+        }
+        .la-dropdown-item.la-item-selected .la-item-check {
+            color: var(--color-info);
+        }
+        /* Dropdown items must not inherit ALL CAPS from the toolbar */
+        .la-dropdown-item { text-transform: none; letter-spacing: 0; }
+
+        /* Compact "(N)" badge inside the la-filter input.  Sits to the
+         * left of the clear X.  Tooltip on hover shows the full list. */
+        .la-filter-count {
+            position: absolute;
+            right: 28px;
+            top: 50%;
+            transform: translateY(-50%);
+            min-width: 16px;
+            height: 16px;
+            line-height: 16px;
+            padding: 0 5px;
+            border-radius: 8px;
+            background: var(--color-info, #2563EB);
+            color: #FFFFFF;
+            font-size: 10px;
+            font-weight: 700;
+            text-align: center;
+            text-transform: none;
+            letter-spacing: 0;
+            z-index: 1;
+            cursor: help;
+            pointer-events: auto;
+        }
+        /* Push the input's right padding so the badge + X don't overlap text */
+        .la-filter-input.la-has-value { padding-right: 56px; }
         .la-dropdown-item-count {
             margin-left: auto;
             font-size: 10px;
@@ -2226,8 +2285,8 @@
         }
         .ops-search {
             padding: 0 10px 0 28px;
-            width: 260px;
-            min-width: 140px;
+            width: 200px;
+            min-width: 120px;
             outline: none;
         }
         .ops-search::placeholder {
@@ -3738,9 +3797,9 @@
             .ops-toolbar-row {
                 padding: 5px 12px;
             }
-            .ops-group--filters {
-                margin-left: auto;
-            }
+            /* No margin-left:auto here — the .ops-toolbar-spacer in the
+             * base rules handles right-alignment on row 1 and lets the
+             * filter group fall LEFT when it wraps to row 2. */
             .ops-search-wrap { flex: 0 1 200px; }
             .ops-search { width: 200px; min-width: 120px; }
             .ops-promo-row { flex-wrap: wrap; gap: 6px; }
@@ -5044,7 +5103,7 @@
                             aria-pressed="true"
                             title="Background poll every 30 seconds for status changes (rerun results, builds triggered elsewhere). Toggle on/off.">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                        <span class="btn-auto-refresh-label">Auto-refresh: ON</span>
+                        <span class="btn-auto-refresh-label">Auto: ON</span>
                     </button>
                     <!-- Select: one-click bulk selection by category -->
                     <div class="ops-dropdown" id="ops-select-dropdown" data-fv-disable>
@@ -5079,15 +5138,21 @@
                         </div>
                     </div>
                     <div class="ops-sep" id="ops-sep-rerun" style="display:none" data-fv-disable></div>
-                    <!-- Rerun: unified action buttons (filter-aware) -->
-                    <button class="ops-btn ops-btn-action" id="ops-rerun-failed" onclick="triggerRerunAllFailed()" style="display:none" data-fv-disable><svg width="13" height="13"><use href="#icon-refresh-cw"/></svg>Rerun Failed</button>
-                    <button class="ops-btn ops-btn-action" id="ops-rerun-unstable" onclick="triggerRerunByStatus('UNSTABLE')" style="display:none" data-fv-disable><svg width="13" height="13"><use href="#icon-refresh-cw"/></svg>Rerun Unstable</button>
-                    <button class="ops-btn ops-btn-action" id="ops-rerun-aborted" onclick="triggerRerunByStatus('ABORTED')" style="display:none" data-fv-disable><svg width="13" height="13"><use href="#icon-refresh-cw"/></svg>Rerun Aborted</button>
-                    <button class="ops-btn ops-btn-primary" id="ops-rerun-selected" onclick="triggerRerunSelected()" style="display:none" data-fv-disable><svg width="13" height="13"><use href="#icon-refresh-ccw"/></svg>Rerun Selected <span class="ops-badge" id="ops-selected-count"></span></button>
+                    <div class="ops-dropdown" id="ops-rerun-dropdown" style="display:none" data-fv-disable>
+                        <button class="ops-btn ops-btn-action ops-dropdown-trigger" onclick="toggleOpsDropdown('ops-rerun-dropdown')" type="button"><svg width="13" height="13"><use href="#icon-refresh-cw"/></svg>Rerun<svg class="ops-dropdown-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></button>
+                        <div class="ops-dropdown-menu" id="ops-rerun-menu">
+                            <button class="ops-dropdown-item" id="ops-rerun-failed" onclick="triggerRerunAllFailed(); closeOpsDropdowns()" style="display:none"><svg width="12" height="12"><use href="#icon-refresh-cw"/></svg>Rerun Failed</button>
+                            <button class="ops-dropdown-item" id="ops-rerun-unstable" onclick="triggerRerunByStatus('UNSTABLE'); closeOpsDropdowns()" style="display:none"><svg width="12" height="12"><use href="#icon-refresh-cw"/></svg>Rerun Unstable</button>
+                            <button class="ops-dropdown-item" id="ops-rerun-aborted" onclick="triggerRerunByStatus('ABORTED'); closeOpsDropdowns()" style="display:none"><svg width="12" height="12"><use href="#icon-refresh-cw"/></svg>Rerun Aborted</button>
+                            <div class="ops-dropdown-divider" id="ops-rerun-sel-divider" style="display:none"></div>
+                            <button class="ops-dropdown-item" id="ops-rerun-selected" onclick="triggerRerunSelected(); closeOpsDropdowns()" style="display:none"><svg width="12" height="12"><use href="#icon-refresh-ccw"/></svg>Rerun Selected <span class="ops-badge" id="ops-selected-count"></span></button>
+                        </div>
+                    </div>
                     <div class="ops-sep"></div>
                     <button class="ops-btn ops-btn-secondary" onclick="exportCSV()"><svg width="13" height="13"><use href="#icon-download"/></svg>CSV</button>
                     <button class="ops-btn ops-btn-action" id="ops-failure-view" onclick="toggleFailureView()" style="display:none"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span id="ops-failure-view-label">Failures</span> <span class="ops-badge ops-badge-danger" id="ops-failure-count"></span></button>
                 </div>
+                <div class="ops-toolbar-spacer"></div>
                 <!-- Right: Filter & Search -->
                 <div class="ops-group ops-group--filters" data-fv-disable>
                     <select id="filter-status" class="ops-select" onchange="applyFilters()">
@@ -5109,15 +5174,16 @@
                     <!-- Log Analysis filter — visible only in Detail mode -->
                     <div class="la-filter-wrap" id="la-filter-wrap" style="display:none">
                         <svg class="la-filter-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-                        <input type="text" id="la-filter-input" class="ops-search la-filter-input" placeholder="Log Analysis..." autocomplete="off" spellcheck="false" />
-                        <button class="la-filter-clear" id="la-filter-clear" title="Clear label filter" style="display:none">
+                        <input type="text" id="la-filter-input" class="ops-search la-filter-input" placeholder="Log Analysis (multi-select)..." title="Click labels to toggle. Filter shows jobs matching ANY selected label." autocomplete="off" spellcheck="false" />
+                        <span class="la-filter-count" id="la-filter-count" style="display:none" title=""></span>
+                        <button class="la-filter-clear" id="la-filter-clear" title="Clear all labels" style="display:none">
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                         </button>
                         <div class="la-dropdown" id="la-dropdown"></div>
                     </div>
                     <div class="ops-search-wrap">
                         <svg class="ops-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                        <input type="text" id="filter-search" class="ops-search" placeholder="Search jobs (regex)..." title="Plain text matches as substring. Also accepts regex: ^prefix, suffix$, (a|b), prp1-.*-job, [0-9]+. Invalid patterns fall back to substring." oninput="debouncedApplyFilters()" />
+                        <input type="text" id="filter-search" class="ops-search" placeholder="Search jobs ..." title="Plain text matches as substring. Also accepts regex: ^prefix, suffix$, (a|b), .*-job, [0-9]+. Invalid patterns fall back to substring." oninput="debouncedApplyFilters()" />
                     </div>
                     <button class="ops-btn ops-btn-ghost" onclick="clearAllFilters()" title="Clear filters"><svg width="13" height="13"><use href="#icon-x"/></svg></button>
                     <div class="ops-sep"></div>
