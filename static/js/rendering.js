@@ -13,12 +13,16 @@ function renderJobNameCell(job) {
 }
 
 // Renders test metric columns (total, passed, failed, skipped, errors) with appropriate CSS classes.
-function renderMetricCells(hasMetrics, errors, total, passed, failed, skipped, sourceTag) {
-    return `<td class="cell-total cell-metric cell-metric-highlight">${hasMetrics ? total + sourceTag : '—'}</td>`
-        + `<td class="cell-passed cell-metric">${renderMetricValue(passed, hasMetrics, 'cell-metric-success')}</td>`
-        + `<td class="cell-failed cell-metric">${renderMetricValue(failed, hasMetrics, 'cell-metric-danger')}</td>`
-        + `<td class="cell-skipped cell-metric">${renderMetricValue(skipped, hasMetrics, 'cell-metric-warning')}</td>`
-        + `<td class="cell-errors cell-metric">${renderMetricValue(errors, hasMetrics, 'cell-metric-danger')}</td>`;
+function renderMetricCells(hasMetrics, errors, total, passed, failed, skipped, sourceTag, diag) {
+    const dashTip = diag
+        ? ` title="No counts available — ${escapeHtml(diag)}"`
+        : '';
+    const dash = `<span class="cell-metric-missing"${dashTip}>—</span>`;
+    return `<td class="cell-total cell-metric cell-metric-highlight">${hasMetrics ? total + sourceTag : dash}</td>`
+        + `<td class="cell-passed cell-metric">${hasMetrics ? renderMetricValue(passed, hasMetrics, 'cell-metric-success') : dash}</td>`
+        + `<td class="cell-failed cell-metric">${hasMetrics ? renderMetricValue(failed, hasMetrics, 'cell-metric-danger')  : dash}</td>`
+        + `<td class="cell-skipped cell-metric">${hasMetrics ? renderMetricValue(skipped, hasMetrics, 'cell-metric-warning') : dash}</td>`
+        + `<td class="cell-errors cell-metric">${hasMetrics ? renderMetricValue(errors, hasMetrics, 'cell-metric-danger')  : dash}</td>`;
 }
 
 // Maps build status to a CSS class for styling the console log icon (color-coded by status).
@@ -196,12 +200,13 @@ function renderJobRow(job) {
     // Per-job test metric columns
     const m = job.test_metrics || {};
     const hm = hasUsableMetrics(m);
-    const totalCount = hm ? m.total : '—';
+    const totalCount = hm ? effectiveTotal(m) : '—';
     const passedCount = hm ? (m.passed || 0) : '—';
     const failedCount = hm ? (m.failed || 0) : '—';
     const errorsCount = hm ? (m.errors || 0) : '—';
     const skippedCount = hm ? (m.skipped || 0) : '—';
     const sourceTag = metricsSourceTag(m);
+    const diag = m.metrics_diagnostic || '';
 
     const classification = job.classification || {};
     const evidenceText = classification.evidence_snippet ? classification.evidence_snippet.substring(0, 100) : '';
@@ -211,7 +216,7 @@ function renderJobRow(job) {
         + renderJobNameCell(job)
         + `<td class="status-cell cell-status">${statusBadge}</td>`
         + renderActionsCell(job)
-        + renderMetricCells(hm, errorsCount, totalCount, passedCount, failedCount, skippedCount, sourceTag)
+        + renderMetricCells(hm, errorsCount, totalCount, passedCount, failedCount, skippedCount, sourceTag, diag)
         + `<td class="cell-exec-time">${formatExecTime(job.last_execution_time)}</td>`
         + renderRegressionCell(job)
         + `<td class="col-evidence cell-meta hidden">${escapeHtml(evidenceText)}</td>`
@@ -253,7 +258,7 @@ function updateJobRow(jobId, job) {
         if (cell) cell.innerHTML = renderMetricValue(val, hm, cls);
     }
     const totalCell = row.querySelector('.cell-total');
-    if (totalCell) totalCell.innerHTML = hm ? m.total + sourceTag : '—';
+    if (totalCell) totalCell.innerHTML = hm ? effectiveTotal(m) + sourceTag : '—';
 
     const execTimeCell = row.querySelector('.cell-exec-time');
     if (execTimeCell) execTimeCell.innerHTML = formatExecTime(job.last_execution_time);

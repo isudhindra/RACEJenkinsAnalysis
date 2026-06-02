@@ -40,18 +40,25 @@ active_operation_id: str = ""
 _ENV_AUTH_PLACEHOLDER = "••••••••"
 
 
-def _create_client(data: dict, *, timeout: int = 30) -> JenkinsClient:
+def _create_client(data: dict, *, timeout: int = 30, pool_size: Optional[int] = None) -> JenkinsClient:
     """Create a JenkinsClient from a request-data dict.
 
     Extracts ``jenkins_url``, ``username``, ``api_token`` from *data*
     and passes *timeout* through.  This eliminates 10 near-identical
     constructor calls scattered across the route handlers.
+
+    ``pool_size`` should be at least as large as the orchestrator's
+    ``max_workers`` — otherwise requests' urllib3 pool (default 10)
+    will silently serialise threads beyond that limit.  Callers in the
+    SSE fetch / refresh paths pass the configured worker count; lighter
+    routes can leave it None and get the safe default of 32.
     """
     return JenkinsClient(
         base_url=data["jenkins_url"],
         username=data["username"],
         api_token=data["api_token"],
         timeout=timeout,
+        pool_size=pool_size if pool_size is not None else 32,
     )
 
 
@@ -133,8 +140,7 @@ def create_app() -> Flask:
 
     app = Flask(__name__, template_folder="templates")
 
-    # Defaults
-    app.config["thread_pool_size"] = 15
+    app.config["thread_pool_size"] = 24
     app.config["default_timeout"] = 30
 
     # Initialize classifier
@@ -151,6 +157,15 @@ def create_app() -> Flask:
         app.config["thread_pool_size"] = defaults["max_workers"]
     if "timeout" in defaults:
         app.config["default_timeout"] = defaults["timeout"]
+
+    env_workers = os.environ.get("JENKINS_MAX_WORKERS", "").strip()
+    if env_workers:
+        try:
+            n = int(env_workers)
+            if 1 <= n <= 64:
+                app.config["thread_pool_size"] = n
+        except ValueError:
+            pass  # Ignore non-integer values, keep prior setting
 
     # Initialize job store
     job_store = {}
@@ -419,7 +434,11 @@ def register_routes(app: Flask) -> None:
         api_token = data.get("api_token")
         max_workers = data.get("max_workers", app.config["thread_pool_size"])
 
-        client = _create_client(data, timeout=app.config["default_timeout"])
+        client = _create_client(
+            data,
+            timeout=app.config["default_timeout"],
+            pool_size=max_workers,
+        )
 
         # Determine job list based on source mode
         if source_mode == "view_url":
@@ -517,7 +536,12 @@ def register_routes(app: Flask) -> None:
                 })
             return Response(empty_gen(), mimetype="text/event-stream")
 
-        client = _create_client(data, timeout=app.config["default_timeout"])
+        # Pool sized to match worker count — see comment in /api/fetch/stream.
+        client = _create_client(
+            data,
+            timeout=app.config["default_timeout"],
+            pool_size=max_workers,
+        )
         orchestrator = AnalysisOrchestrator(
             client=client,
             classifier=app.classifier,

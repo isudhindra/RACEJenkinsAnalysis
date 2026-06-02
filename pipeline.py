@@ -1,10 +1,20 @@
 
+import logging
 import re
 from typing import Callable, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import yaml
+
+# Module logger.
+_log = logging.getLogger("jenkins.metrics")
+if not _log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
+    _log.addHandler(_h)
+    _log.setLevel(logging.INFO)
+    _log.propagate = False
 
 from models import (
     JobRecord,
@@ -645,7 +655,7 @@ class AnalysisOrchestrator:
         self,
         client: JenkinsClient,
         classifier: Classifier,
-        max_workers: int = 15,
+        max_workers: int = 24,
         promotion_time: Optional[datetime] = None,
     ) -> None:
         """
@@ -654,7 +664,7 @@ class AnalysisOrchestrator:
         Args:
             client: JenkinsClient instance for API interactions.
             classifier: Classifier instance for failure classification.
-            max_workers: Maximum number of worker threads (default: 15).
+            max_workers: Maximum number of worker threads (default: 24).
             promotion_time: Optional release-promotion cutoff. When set, every
                 JobRecord serialized by this orchestrator's SSE callbacks will
                 include a ``release_status`` field derived from this time.
@@ -922,8 +932,9 @@ class AnalysisOrchestrator:
             previous_completed = rb
             break
 
-        # 3. Fetch test metrics.  Branch on latest.status:
+        # 3. Fetch test metrics.
         test_metrics = None
+        diag: List[str] = []
         metrics_build_number = latest.build_number
         is_in_flight_or_aborted = latest.status in (
             BuildStatus.IN_PROGRESS, BuildStatus.ABORTED,
@@ -936,45 +947,75 @@ class AnalysisOrchestrator:
                 )
                 if test_metrics is not None:
                     test_metrics.from_previous_build = True
-            except JenkinsClientError:
-                pass
+                    diag.append("api_prev_ok")
+                else:
+                    diag.append("api_prev_404")
+            except JenkinsClientError as e:
+                diag.append("api_prev_err:%s" % (e.status_code or "x"))
         console_text = ""
-        if test_metrics is None:
+        if test_metrics is None and not is_in_flight_or_aborted:
             try:
                 test_metrics = self.client.fetch_test_metrics(
                     job_url, latest.build_number,
                 )
-            except JenkinsClientError:
-                pass  # Test metrics may not exist
+                if test_metrics is not None:
+                    diag.append("api_ok")
+                else:
+                    diag.append("api_404")  # /testReport not published
+            except JenkinsClientError as e:
+                diag.append("api_err:%s" % (e.status_code or "x"))
 
-        # Console-fallback parsing (only for terminal builds
+        # Console-fallback parsing (only for terminal builds).
         if test_metrics is None and not is_in_flight_or_aborted:
             try:
                 console_text = self.client.fetch_console_tail(
                     job_url, latest.build_number, lines=500,
                 )
-            except JenkinsClientError:
+                diag.append("console_fetched:%dB" % len(console_text))
+            except JenkinsClientError as e:
                 console_text = ""
+                diag.append("console_err:%s" % (e.status_code or "x"))
 
             if console_text:
                 console_metrics = parse_console_test_metrics(console_text)
                 if console_metrics is not None:
                     test_metrics = console_metrics
+                    diag.append("console_parsed")
                 else:
+                    diag.append("console_no_match")
                     test_metrics = TestMetrics(
                         metrics_source=None,
                         metrics_unavailable=True,
                     )
             else:
+                diag.append("console_empty")
                 test_metrics = TestMetrics(
                     metrics_source=None,
                     metrics_unavailable=True,
                 )
         elif test_metrics is None:
             # In-progress / aborted with no previous completed build
+            diag.append("inflight_no_prev")
             test_metrics = TestMetrics(
                 metrics_source=None,
                 metrics_unavailable=True,
+            )
+
+        # Stamp the diagnostic breadcrumb on the metrics record and emit
+        # a single log line so operators can grep stdout for the pattern.
+        test_metrics.metrics_diagnostic = ",".join(diag)
+        if test_metrics.metrics_unavailable:
+            _log.warning(
+                "MISSING [%s] build#%s status=%s diag=%s",
+                job_name, latest.build_number, latest.status.value, test_metrics.metrics_diagnostic,
+            )
+        else:
+            _log.info(
+                "OK [%s] build#%s status=%s totals=%s/%s/%s/%s diag=%s",
+                job_name, latest.build_number, latest.status.value,
+                test_metrics.total, test_metrics.passed,
+                test_metrics.failed, test_metrics.skipped,
+                test_metrics.metrics_diagnostic,
             )
 
         # Find ``last_passed`` deterministically: if the latest run is itself
