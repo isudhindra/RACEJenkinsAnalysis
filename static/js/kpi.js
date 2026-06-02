@@ -13,7 +13,21 @@ function safeMetric(m, field) {
 
 // Return true when a test_metrics object contains real data (not unavailable/empty).
 function hasUsableMetrics(m) {
-    return m && !m.metrics_unavailable && m.total !== undefined && m.total !== null;
+    if (!m || m.metrics_unavailable) return false;
+    const fields = ['total', 'passed', 'failed', 'skipped', 'errors'];
+    for (let i = 0; i < fields.length; i++) {
+        const v = m[fields[i]];
+        if (typeof v === 'number' && v >= 0) return true;
+    }
+    return false;
+}
+
+// Derive the "best" total for display
+function effectiveTotal(m) {
+    if (!m) return 0;
+    const partsSum = safeMetric(m, 'passed') + safeMetric(m, 'failed')
+                   + safeMetric(m, 'skipped') + safeMetric(m, 'errors');
+    return Math.max(safeMetric(m, 'total'), partsSum);
 }
 
 // Walk a list of jobs and sum up their test-case counts (passed, failed, skipped, errors).

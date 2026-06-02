@@ -12,6 +12,7 @@ from datetime import datetime
 
 import requests
 from requests.auth import HTTPBasicAuth
+from requests.adapters import HTTPAdapter
 
 from models import BuildInfo, BuildStatus, TestMetrics
 
@@ -75,6 +76,7 @@ class JenkinsClient:
         username: str,
         api_token: str,
         timeout: int = 30,
+        pool_size: int = 32,
     ) -> None:
         """
         Initialize JenkinsClient.
@@ -93,6 +95,13 @@ class JenkinsClient:
         self.session = requests.Session()
         self.session.auth = HTTPBasicAuth(username, api_token)
         self.session.headers.update({"Accept": "application/json"})
+        adapter = HTTPAdapter(
+            pool_connections=pool_size,
+            pool_maxsize=pool_size,
+            max_retries=0,  # retries are handled at the call-site level
+        )
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
         # CSRF crumb cache. Lazy-initialised on the first POST.
         #   None             → not yet fetched
@@ -250,11 +259,20 @@ class JenkinsClient:
 
             data = response.json()
 
+
+            total = data.get("totalCount")
+            passed = data.get("passCount") or 0
+            failed = data.get("failCount") or 0
+            skipped = data.get("skipCount") or 0
+            if total is None:
+                parts_sum = passed + failed + skipped
+                total = parts_sum if parts_sum > 0 else None
+
             return TestMetrics(
-                total=data.get("totalCount"),
-                passed=data.get("passCount"),
-                failed=data.get("failCount"),
-                skipped=data.get("skipCount"),
+                total=total,
+                passed=passed,
+                failed=failed,
+                skipped=skipped,
                 duration_seconds=data.get("duration"),
             )
 
