@@ -5117,7 +5117,7 @@
                     </div>
                     <div class="ops-search-wrap">
                         <svg class="ops-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                        <input type="text" id="filter-search" class="ops-search" placeholder="Search jobs..." oninput="debouncedApplyFilters()" />
+                        <input type="text" id="filter-search" class="ops-search" placeholder="Search jobs (regex)..." title="Plain text matches as substring. Also accepts regex: ^prefix, suffix$, (a|b), prp1-.*-job, [0-9]+. Invalid patterns fall back to substring." oninput="debouncedApplyFilters()" />
                     </div>
                     <button class="ops-btn ops-btn-ghost" onclick="clearAllFilters()" title="Clear filters"><svg width="13" height="13"><use href="#icon-x"/></svg></button>
                     <div class="ops-sep"></div>

@@ -834,12 +834,15 @@ var _laVisibleItems = [];
             setTimeout(function() { closeLogAnalysisDropdown(); }, 150);
         });
 
-        // Wire up the clear button to reset the filter
-        clearBtn.addEventListener('click', function() {
+
+        clearBtn.addEventListener('mousedown', function(e) {
+            e.preventDefault();
             clearLogAnalysisFilter();
-            appState.filters.logAnalysisLabel = null;
             applyFilters();
+
             input.focus();
+            rebuildLogAnalysisLabelCache();
+            openLogAnalysisDropdown('');
         });
     });
 })();
@@ -888,7 +891,20 @@ function applyFilters() {
 // Synchronous core — original behaviour
 function _applyFiltersImpl() {
     appState.filters.status = document.getElementById('filter-status').value || null;
-    appState.filters.searchText = document.getElementById('filter-search').value.toLowerCase() || '';
+
+    var rawSearch = document.getElementById('filter-search').value || '';
+    appState.filters.searchText = rawSearch.toLowerCase();
+    appState.filters._searchRe = null;
+    if (rawSearch.trim().length > 0) {
+        try {
+            appState.filters._searchRe = new RegExp(rawSearch, 'i');
+        } catch (e) {
+            // Invalid regex — keep _searchRe null; matchesFilters will
+            // fall back to substring on searchText.
+            appState.filters._searchRe = null;
+        }
+    }
+
     // Release Status filter — only meaningful when the column is visible (promotion-active).
     // When hidden, the input is unreachable so the value is naturally null.
     var releaseSel = document.getElementById('filter-release-status');
@@ -936,14 +952,19 @@ function matchesFilters(job) {
     if (appState.filters.status && job.latest_status !== appState.filters.status) return false;
 
     // Release Status filter — backend emits 'PASS' / 'PENDING' / 'FAIL' / 'NA'.
-    // We never offer 'NA' in the dropdown because the filter is only shown when
-    // a promotion time is set, in which case no job should be NA.
     if (appState.filters.releaseStatus && job.release_status !== appState.filters.releaseStatus) return false;
 
     if (appState.filters.searchText) {
-        const searchText = appState.filters.searchText;
-        if (!job.name.toLowerCase().includes(searchText) && !job.url.toLowerCase().includes(searchText)) {
-            return false;
+        const re = appState.filters._searchRe;
+        if (re) {
+            // Regex path — test the raw name/url so anchors (^, $) work
+            if (!re.test(job.name) && !re.test(job.url)) return false;
+        } else {
+            // Fallback: pattern didn't compile, treat as case-insensitive substring.
+            const searchText = appState.filters.searchText;
+            if (!job.name.toLowerCase().includes(searchText) && !job.url.toLowerCase().includes(searchText)) {
+                return false;
+            }
         }
     }
 
