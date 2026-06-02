@@ -186,15 +186,12 @@ class JenkinsClient:
             response = self._request_with_retry("GET", url)
             data = response.json()
 
-            # Map Jenkins build result to BuildStatus
-            building = data.get("building", False)
+            # Map Jenkins build result to BuildStatus.
             result = data.get("result")
-
-            # If build is in progress and has no result yet, mark as IN_PROGRESS
-            if building and result is None:
+            if result is None:
                 status = BuildStatus.IN_PROGRESS
             else:
-                status = self._parse_build_status(result or "UNKNOWN")
+                status = self._parse_build_status(result)
 
             # Parse timestamp (milliseconds since epoch)
             timestamp_ms = data.get("timestamp", 0)
@@ -475,13 +472,11 @@ class JenkinsClient:
             results = []
 
             for b in builds_data:
-                building = b.get("building", False)
                 result = b.get("result")
-
-                if building and result is None:
+                if result is None:
                     status = BuildStatus.IN_PROGRESS
                 else:
-                    status = self._parse_build_status(result or "UNKNOWN")
+                    status = self._parse_build_status(result)
 
                 timestamp_ms = b.get("timestamp", 0)
                 timestamp = datetime.fromtimestamp(timestamp_ms / 1000.0)

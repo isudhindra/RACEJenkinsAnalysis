@@ -897,21 +897,58 @@ class AnalysisOrchestrator:
         # 1. Fetch latest build info (required — propagate error)
         latest = self.client.fetch_build_info(job_url, "lastBuild")
 
-        # 2. Fetch test metrics from API (optional — set to None on failure)
-        test_metrics = None
+        # 2. Fetch the recent build window UP-FRONT 
+        recent_builds = []
         try:
-            test_metrics = self.client.fetch_test_metrics(job_url, latest.build_number)
+            recent_builds = self.client.fetch_recent_builds(job_url, count=3)
         except JenkinsClientError:
-            pass  # Test metrics may not exist
+            pass  # Silently skip — context will be partial
 
-        # 3. If API did not provide test metrics, fetch console and parse
-        #    This runs for EVERY job (not just failed/unstable) so that the
-        #    dashboard always shows test execution counts when available.
-        #    NOTE: This step only extracts test-summary metrics from console.
-        #    Failure-specific parsing (error logs, failure context) is deferred
-        #    to Stage 2 and does NOT run for passed jobs.
+        # Derive ``previous`` from the recent window — first non-latest entry.
+        previous = None
+        for rb in recent_builds:
+            if rb.build_number == latest.build_number:
+                continue
+            previous = rb
+            break
+
+        # First COMPLETED previous build
+        previous_completed = None
+        for rb in recent_builds:
+            if rb.build_number == latest.build_number:
+                continue
+            if rb.status == BuildStatus.IN_PROGRESS:
+                continue
+            previous_completed = rb
+            break
+
+        # 3. Fetch test metrics.  Branch on latest.status:
+        test_metrics = None
+        metrics_build_number = latest.build_number
+        is_in_flight_or_aborted = latest.status in (
+            BuildStatus.IN_PROGRESS, BuildStatus.ABORTED,
+        )
+        if is_in_flight_or_aborted and previous_completed is not None:
+            metrics_build_number = previous_completed.build_number
+            try:
+                test_metrics = self.client.fetch_test_metrics(
+                    job_url, previous_completed.build_number,
+                )
+                if test_metrics is not None:
+                    test_metrics.from_previous_build = True
+            except JenkinsClientError:
+                pass
         console_text = ""
         if test_metrics is None:
+            try:
+                test_metrics = self.client.fetch_test_metrics(
+                    job_url, latest.build_number,
+                )
+            except JenkinsClientError:
+                pass  # Test metrics may not exist
+
+        # Console-fallback parsing (only for terminal builds
+        if test_metrics is None and not is_in_flight_or_aborted:
             try:
                 console_text = self.client.fetch_console_tail(
                     job_url, latest.build_number, lines=500,
@@ -933,25 +970,12 @@ class AnalysisOrchestrator:
                     metrics_source=None,
                     metrics_unavailable=True,
                 )
-
-        # 4. Fetch recent build history. The display contract is:
-        #      "latest pass + 2 most recent runs"
-        #    so we only need 3 recent builds for the row. ``last_passed``
-        #    may be older than that window, so we look it up separately
-        #    using a single deep walkback query (up to 50 builds).
-        recent_builds = []
-        try:
-            recent_builds = self.client.fetch_recent_builds(job_url, count=3)
-        except JenkinsClientError:
-            pass  # Silently skip — context will be partial
-
-        # Derive ``previous`` from the recent window — first non-latest entry.
-        previous = None
-        for rb in recent_builds:
-            if rb.build_number == latest.build_number:
-                continue
-            previous = rb
-            break
+        elif test_metrics is None:
+            # In-progress / aborted with no previous completed build
+            test_metrics = TestMetrics(
+                metrics_source=None,
+                metrics_unavailable=True,
+            )
 
         # Find ``last_passed`` deterministically: if the latest run is itself
         # a SUCCESS, that's it; otherwise scan the recent window first (cheap)

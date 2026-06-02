@@ -290,18 +290,121 @@ function exportDiagLogs() {
 
 // ── Global error hooks ─────────────────────────────────────────────────
 
-// Capture uncaught synchronous errors so they appear in the diagnostics Console tab.
+// Recursion guard 
+let _diagSelfLogging = false;
+function _diagSafeLog(severity, source, message, detail) {
+    if (_diagSelfLogging) return;
+    _diagSelfLogging = true;
+    try { diagLog(severity, source, message, detail); }
+    finally { _diagSelfLogging = false; }
+}
+
+// (1) Capture-phase window 'error'
 window.addEventListener('error', function(event) {
-    diagLog('error', 'Runtime', event.message || 'Uncaught error', {
+    // Resource-load errors have a target that is an element, no event.error.
+    const tgt = event.target;
+    if (tgt && tgt !== window && (tgt.tagName === 'LINK' || tgt.tagName === 'SCRIPT' ||
+                                  tgt.tagName === 'IMG' || tgt.tagName === 'SOURCE')) {
+        _diagSafeLog('error', 'Resource', 'Failed to load ' + tgt.tagName.toLowerCase(), {
+            raw: tgt.src || tgt.href || '(no url)',
+            extra: tgt.tagName
+        });
+        return;
+    }
+    _diagSafeLog('error', 'Runtime', event.message || 'Uncaught error', {
         stack: event.error ? event.error.stack : null,
         raw: event.filename ? event.filename + ':' + event.lineno + ':' + event.colno : null
     });
-});
+}, true);  // <-- capture phase so resource errors are visible
 
-// Capture unhandled promise rejections the same way.
+// Unhandled promise rejections.
 window.addEventListener('unhandledrejection', function(event) {
     const msg = event.reason instanceof Error ? event.reason.message : String(event.reason);
-    diagLog('error', 'Promise', 'Unhandled rejection: ' + msg, {
+    _diagSafeLog('error', 'Promise', 'Unhandled rejection: ' + msg, {
         stack: event.reason instanceof Error ? event.reason.stack : null
     });
 });
+
+// (2) Intercept console.error and console.warn
+(function patchConsole() {
+    const orig = {
+        error: console.error.bind(console),
+        warn:  console.warn.bind(console)
+    };
+
+    function fmt(args) {
+        return Array.prototype.map.call(args, function (a) {
+            if (a == null) return String(a);
+            if (a instanceof Error) return a.message;
+            if (typeof a === 'object') {
+                try { return JSON.stringify(a); } catch (_) { return String(a); }
+            }
+            return String(a);
+        }).join(' ');
+    }
+
+    console.error = function () {
+        orig.error.apply(console, arguments);
+        const stack = (arguments[0] instanceof Error) ? arguments[0].stack : null;
+        _diagSafeLog('error', 'Console', fmt(arguments), stack ? { stack: stack } : null);
+    };
+    console.warn = function () {
+        orig.warn.apply(console, arguments);
+        _diagSafeLog('warning', 'Console', fmt(arguments));
+    };
+})();
+
+// (3) Wrap window.fetch to auto-log FAILURES 
+(function patchFetch() {
+    const origFetch = window.fetch;
+    if (!origFetch) return;
+    window.fetch = function (resource, init) {
+        const url = (typeof resource === 'string') ? resource :
+                    (resource && resource.url) ? resource.url : String(resource);
+        const method = (init && init.method) ? init.method.toUpperCase() :
+                       (resource && resource.method) ? resource.method.toUpperCase() : 'GET';
+        const t0 = (performance && performance.now) ? performance.now() : Date.now();
+        return origFetch.call(this, resource, init).then(function (resp) {
+            if (!resp.ok && resp.status >= 400) {
+                const dur = Math.round(((performance && performance.now) ? performance.now() : Date.now()) - t0);
+                diagLogNetwork(method, url, resp.status, dur, resp.statusText || ('HTTP ' + resp.status));
+            }
+            return resp;
+        }, function (err) {
+            const dur = Math.round(((performance && performance.now) ? performance.now() : Date.now()) - t0);
+            // AbortError means a deliberate abort OR a timeout via AbortController.
+            const isAbort = err && (err.name === 'AbortError');
+            const status = isAbort ? 'TIMEOUT' : 'ERR';
+            diagLogNetwork(method, url, status, dur, err && err.message ? err.message : String(err));
+            throw err;
+        });
+    };
+})();
+
+// (4) Wrap setTimeout / setInterval
+(function patchTimers() {
+    const origST = window.setTimeout;
+    const origSI = window.setInterval;
+
+    function wrap(fn, name) {
+        if (typeof fn !== 'function') return fn;
+        return function () {
+            try { return fn.apply(this, arguments); }
+            catch (e) {
+                _diagSafeLog('error', name, e && e.message ? e.message : String(e), {
+                    stack: e && e.stack ? e.stack : null
+                });
+                throw e;
+            }
+        };
+    }
+
+    window.setTimeout = function (fn, delay) {
+        const args = Array.prototype.slice.call(arguments, 2);
+        return origST.call(window, wrap(fn, 'setTimeout'), delay, ...args);
+    };
+    window.setInterval = function (fn, delay) {
+        const args = Array.prototype.slice.call(arguments, 2);
+        return origSI.call(window, wrap(fn, 'setInterval'), delay, ...args);
+    };
+})();

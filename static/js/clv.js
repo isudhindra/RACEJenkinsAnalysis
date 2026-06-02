@@ -391,7 +391,9 @@ const CLV_PATTERNS = [
 
     // ── Generic error keywords (broad catch) ──────────────────────
     { id: 'gen-error-prefix',  cls: 'error',      re: /^ERROR\b|^FATAL\b|^SEVERE\b/,  framework: 'generic' },
-    { id: 'gen-failed-line',   cls: 'error',      re: /\bFAILURE\b|\bFAILED\b/i,      framework: 'generic' },
+    { id: 'gen-build-failure', cls: 'error',      re: /\bBUILD\s+FAILURE\b|<<<\s+FAILURE\b|>>>\s+FAILED\b|\bTESTS?\s+FAILED\b/, framework: 'generic' },
+    // Cucumber failure marker — `Test failed at step:` is the canonical
+    { id: 'cucumber-step-fail',cls: 'error',      re: /^\s*Test failed at step:|^\s*✘\s/, framework: 'cucumber' },
     { id: 'gen-exception',     cls: 'error',      re: /Exception:|Error:|ENOENT|ECONNREFUSED|EACCES/,  framework: 'generic' },
     { id: 'gen-connection',    cls: 'error',      re: /Connection\s+(refused|reset|timed\s*out)/i,     framework: 'generic' },
 
@@ -414,6 +416,18 @@ const CLV_PATTERNS = [
 
 // Classify a single console-log line by testing it against the pattern registry, first match wins
 function clvClassifyLine(text) {
+    const prefixMatch = text.slice(0, 80).match(/\[\s*(ERROR|FATAL|SEVERE|WARN(?:ING)?|INFO|DEBUG|TRACE)\s*\]/i);
+    if (prefixMatch) {
+        const level = prefixMatch[1].toUpperCase();
+        if (level === 'ERROR' || level === 'FATAL' || level === 'SEVERE') {
+            return 'error';
+        }
+        if (level === 'WARN' || level === 'WARNING') return 'warn';
+        // INFO / DEBUG / TRACE — never an error, regardless of body content.
+        return 'info';
+    }
+
+    // No log-level prefix — apply the content patterns.
     for (let i = 0; i < CLV_PATTERNS.length; i++) {
         if (CLV_PATTERNS[i].re.test(text)) return CLV_PATTERNS[i].cls;
     }
@@ -789,8 +803,7 @@ function _clvScrollToErrorBlock(cursorIdx) {
     const filterIdx = clvState.filteredIndices.indexOf(anchorRawIdx);
     if (filterIdx === -1) { clvUpdateErrNavButtons(); return; }
 
-    // Ensure the target is rendered (handles both progressive loading and recycled DOM)
-    while (clvState.renderedUpTo <= filterIdx) { clvRenderChunk(); }
+    // Ensure the target is rendered.
     clvEnsureRendered(filterIdx);
 
     // Scroll to anchor and highlight entire block
@@ -1079,10 +1092,7 @@ function clvSearchNav(direction) {
 
     const filterIdx = clvState.searchMatches[clvState.searchCursor];
 
-    // Ensure rendered
-    while (clvState.renderedUpTo <= filterIdx) {
-        clvRenderChunk();
-    }
+    clvEnsureRendered(filterIdx);
 
     // Scroll to line
     const rawIdx = clvState.filteredIndices[filterIdx];

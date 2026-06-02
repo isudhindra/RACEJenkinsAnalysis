@@ -3004,13 +3004,11 @@
             box-shadow: 0 1px 4px rgba(245,158,11,0.06);
         }
 
-        /* Selected row */
         tbody tr.row-selected {
-            background-color: #EFF6FF !important;
-            box-shadow: inset 0 0 0 1px rgba(59,130,246,0.15), 0 1px 3px rgba(59,130,246,0.06);
+            background-color: #F3F4F6 !important;
         }
         tbody tr.row-selected:hover {
-            background-color: #E8F1FF !important;
+            background-color: #EBEDF0 !important;
         }
 
         tr {
@@ -5188,6 +5186,12 @@
 
         <!-- Table Container -->
         <div class="table-container">
+            <!-- Loading overlay for filter / sort / refresh re-renders.
+                 Stays invisible for fast operations (CSS transition-delay)
+                 and fades in only if work exceeds ~90ms. -->
+            <div id="table-overlay" class="table-overlay" aria-hidden="true">
+                <div class="table-overlay-spinner" role="status" aria-label="Loading"></div>
+            </div>
             <div id="empty-state" class="empty-state">
                 <div class="empty-state-icon">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

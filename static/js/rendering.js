@@ -177,11 +177,11 @@ function _renderChipHtml(label, color, tooltip) {
     return `<span class="rec-chip rec-chip--${color}" title="${safeTip}"><span class="rec-chip-dot"></span>${safeLabel}</span>`;
 }
 
-// Source-of-metrics indicator removed by request — console-parsed and
-// API-sourced totals now render identically.  The function is kept (rather
-// than deleted) so the call sites in renderJobRow / updateJobRow that
-// concatenate its return value remain stable.
-function metricsSourceTag(_m) {
+// Tiny marker appended to the Total cell.
+function metricsSourceTag(m) {
+    if (m && m.from_previous_build) {
+        return '<span class="cell-metrics-from-prev" title="Counts from the previous completed build — the current run is still in-flight or was aborted.">(prev)</span>';
+    }
     return '';
 }
 

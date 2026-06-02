@@ -103,6 +103,7 @@ class TestMetrics:
     duration_seconds: Optional[float] = None
     metrics_source: str = "api"
     metrics_unavailable: bool = False
+    from_previous_build: bool = False
 
 
 @dataclass
@@ -353,11 +354,13 @@ class JobRecord:
                 "duration_seconds": self.test_metrics.duration_seconds,
                 "metrics_source": self.test_metrics.metrics_source,
                 "metrics_unavailable": self.test_metrics.metrics_unavailable,
+                "from_previous_build": self.test_metrics.from_previous_build,
             }
         else:
             result["test_metrics"] = {
                 "metrics_unavailable": True,
                 "metrics_source": None,
+                "from_previous_build": False,
             }
 
         if self.classification is not None:

@@ -418,6 +418,36 @@ table#job-table,
 
 /* ---- Sticky table header ----------------------------------------------- */
 .table-container { position: relative; }
+
+.table-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.62);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  transition-delay: 90ms;
+}
+.table-overlay.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.table-overlay-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--theme-mid-grey);
+  border-top-color: var(--theme-blue);
+  border-radius: 50%;
+  animation: tli-spin 0.7s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .table-overlay-spinner { animation: none; }
+}
 #job-table thead { position: sticky; top: 0; z-index: 5; }
 #job-table thead th {
   position: sticky;
@@ -657,8 +687,20 @@ tr.row-auto-refresh-flash > td {
   background: #f6f7f9 !important;
 }
 #job-table tbody tr.row-selected > td {
-  background: #eaf2f8 !important;
+  background: #f3f4f6 !important;
+}
+
+#job-table tbody tr.row-selected > td:first-child {
   box-shadow: inset 4px 0 0 var(--theme-blue);
+}
+
+
+#job-table tbody tr.row-selected .job-name-cell a {
+  color: var(--theme-black) !important;
+  font-weight: 600 !important;
+}
+#job-table tbody tr.row-selected .job-name-cell a:hover {
+  color: var(--theme-blue) !important;
 }
 
 /* Count pill next to each "Select … (N)" dropdown item. */
@@ -673,4 +715,23 @@ tr.row-auto-refresh-flash > td {
 body.paint-select-armed #job-table tbody tr[data-job-id]:not(.detail-row),
 body.paint-select-armed #job-table tbody tr[data-job-id]:not(.detail-row) * {
   cursor: cell !important;
+}
+
+#job-table {
+  table-layout: fixed !important;
+}
+#job-table tbody tr[data-job-id]:not(.detail-row) {
+  contain: layout style paint;
+}
+#job-table tbody tr[data-job-id] td {
+  animation: none !important;
+}
+
+.cell-metrics-from-prev {
+  margin-left: 4px;
+  font-size: 10px;
+  font-style: italic;
+  font-weight: 500;
+  color: var(--theme-dark-grey);
+  vertical-align: middle;
 }
