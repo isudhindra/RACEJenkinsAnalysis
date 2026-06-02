@@ -834,12 +834,21 @@ var _laVisibleItems = [];
             setTimeout(function() { closeLogAnalysisDropdown(); }, 150);
         });
 
-        // Wire up the clear button to reset the filter
-        clearBtn.addEventListener('click', function() {
+        // Wire up the clear button to reset the filter.
+        // Use mousedown + preventDefault (not click) so the button never
+        // steals focus from the input — otherwise the input.blur handler
+        // schedules a 150ms close timer that fires *after* we re-open
+        // the dropdown, making the filter feel broken on the second use.
+        clearBtn.addEventListener('mousedown', function(e) {
+            e.preventDefault();
             clearLogAnalysisFilter();
-            appState.filters.logAnalysisLabel = null;
             applyFilters();
+            // Input retains focus (preventDefault above) — but if it
+            // happened to be unfocused, give it focus explicitly so the
+            // dropdown shows up and the user can pick another label.
             input.focus();
+            rebuildLogAnalysisLabelCache();
+            openLogAnalysisDropdown('');
         });
     });
 })();
@@ -888,7 +897,26 @@ function applyFilters() {
 // Synchronous core — original behaviour
 function _applyFiltersImpl() {
     appState.filters.status = document.getElementById('filter-status').value || null;
-    appState.filters.searchText = document.getElementById('filter-search').value.toLowerCase() || '';
+
+    // Search supports both plain substrings AND regex patterns.  Try to
+    // compile the input as a case-insensitive RegExp; if it parses, use
+    // pattern matching (anchors, alternation, character classes, etc.).
+    // If it doesn't compile (unbalanced bracket, etc.) we silently fall
+    // back to a case-insensitive substring match.  Precompile here so
+    // the per-row matchesFilters loop never re-parses the pattern.
+    var rawSearch = document.getElementById('filter-search').value || '';
+    appState.filters.searchText = rawSearch.toLowerCase();
+    appState.filters._searchRe = null;
+    if (rawSearch.trim().length > 0) {
+        try {
+            appState.filters._searchRe = new RegExp(rawSearch, 'i');
+        } catch (e) {
+            // Invalid regex — keep _searchRe null; matchesFilters will
+            // fall back to substring on searchText.
+            appState.filters._searchRe = null;
+        }
+    }
+
     // Release Status filter — only meaningful when the column is visible (promotion-active).
     // When hidden, the input is unreachable so the value is naturally null.
     var releaseSel = document.getElementById('filter-release-status');
@@ -941,9 +969,18 @@ function matchesFilters(job) {
     if (appState.filters.releaseStatus && job.release_status !== appState.filters.releaseStatus) return false;
 
     if (appState.filters.searchText) {
-        const searchText = appState.filters.searchText;
-        if (!job.name.toLowerCase().includes(searchText) && !job.url.toLowerCase().includes(searchText)) {
-            return false;
+        const re = appState.filters._searchRe;
+        if (re) {
+            // Regex path — test the raw name/url so anchors (^, $) work
+            // correctly.  RegExp was built with the 'i' flag in
+            // _applyFiltersImpl, so case is already handled.
+            if (!re.test(job.name) && !re.test(job.url)) return false;
+        } else {
+            // Fallback: pattern didn't compile, treat as case-insensitive substring.
+            const searchText = appState.filters.searchText;
+            if (!job.name.toLowerCase().includes(searchText) && !job.url.toLowerCase().includes(searchText)) {
+                return false;
+            }
         }
     }
 
