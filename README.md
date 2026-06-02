@@ -1,4 +1,4 @@
-<h1 align="center">Jenkins Analysis &amp; Execution Hub</h1>
+<h1 align="center">JenkinsJobAnalysisTool</h1>
 
 <p align="center">
 A local dashboard that pulls live job status from Jenkins, validates each job
@@ -13,6 +13,7 @@ and surfaces everything in one screen.<br>
   <a href="#setup">Setup</a> ·
   <a href="#configure-jenkins-instances">Configure</a> ·
   <a href="#using-the-dashboard">Use</a> ·
+  <a href="#tuning-fetch-speed">Tuning</a> ·
   <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
@@ -221,12 +222,44 @@ lists. Minimal example:
       ]
     }
   ],
-  "defaults": { "max_workers": 15, "timeout": 30 }
+  "defaults": { "max_workers": 24, "timeout": 30 }
 }
 ```
 
 > Job-list files live in `config/job_lists/`. Each is a JSON array of
 > Jenkins job names — see the existing examples in that folder.
+
+---
+
+## Tuning fetch speed
+
+Fetch-jobs is I/O-bound — most of each per-job call is the wait on Jenkins.
+The default worker count is **24** parallel threads, which works well for
+most Jenkins masters. If your server can handle more (or less), override
+with an env var before launching:
+
+```bash
+# macOS / Linux
+export JENKINS_MAX_WORKERS=40
+analyseJenkins
+```
+
+```powershell
+# Windows
+$Env:JENKINS_MAX_WORKERS = "40"
+analyseJenkins
+```
+
+| Workers | Notes                                                                      |
+| ------- | -------------------------------------------------------------------------- |
+| `15`    | Conservative — old default. Use if your Jenkins is shared/under-provisioned. |
+| `24`    | **Default.** Comfortable for most masters.                                |
+| `40–50` | Aggressive. May trigger `429` / `503` from under-provisioned Jenkins.     |
+| `> 64`  | Rejected — capped to protect against typos that overload the master.       |
+
+The HTTP connection pool inside `JenkinsClient` is automatically sized to
+match, so every thread gets a real concurrent socket (default `requests`
+behavior would have queued the overflow).
 
 ---
 
@@ -287,5 +320,7 @@ lists. Minimal example:
 | `analyseJenkins: command not found` after `setup/setup.sh` | Reload your shell: `source ~/.zshrc` (or `~/.bash_profile`, `~/.bashrc`). Opening a new terminal works too. |
 | `setup/setup.sh` says "doesn't look like the project root" | `cd` into the project folder first, then re-run. |
 | Moved the project, `analyseJenkins` now fails | Re-run `bash setup/setup.sh` (or `.\setup\setup.ps1`) from the new location — it replaces the old entry. |
+| Table cells show `—` for test counts | Hover any dash cell — the tooltip shows why (`api_404,console_no_match` means Jenkins didn't publish a testReport and the console fallback didn't match). Server stdout has matching `[WARNING] jenkins.metrics: MISSING …` lines per job. |
+| Fetch-jobs is slow | Bump worker count: `export JENKINS_MAX_WORKERS=40` (see [Tuning fetch speed](#tuning-fetch-speed)). |
 
 </details>
