@@ -241,7 +241,8 @@ function updateEmptyState() {
         // Check if all rows are filtered out
         const visibleRows = document.querySelectorAll('tbody tr[data-job-id]:not(.detail-row):not([style*="display: none"])');
         const allFiltered = visibleRows.length === 0;
-        const hasActiveFilter = !!(appState.filters.status || appState.filters.searchText || appState.filters.logAnalysisLabel || appState.filters.releaseStatus);
+        const labels = appState.filters.logAnalysisLabels;
+        const hasActiveFilter = !!(appState.filters.status || appState.filters.searchText || (labels && labels.length > 0) || appState.filters.releaseStatus);
         if (noResults) noResults.classList.toggle('hidden', !(allFiltered && hasActiveFilter));
     } else {
         $id('empty-state').classList.remove('hidden');

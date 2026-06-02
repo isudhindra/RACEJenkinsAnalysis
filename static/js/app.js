@@ -280,7 +280,7 @@ function clearAllFilters() {
     appState.filters = {
         status: null,
         searchText: '',
-        logAnalysisLabel: null,
+        logAnalysisLabels: [],
         releaseStatus: null
     };
     applyFilters();
@@ -319,7 +319,7 @@ function resetDashboardState() {
     if (filterSearch) filterSearch.value = '';
     var filterRelease = document.getElementById('filter-release-status');
     if (filterRelease) filterRelease.value = '';
-    appState.filters = { status: null, searchText: '', logAnalysisLabel: null, releaseStatus: null };
+    appState.filters = { status: null, searchText: '', logAnalysisLabels: [], releaseStatus: null };
     // Clear log analysis autocomplete filter if active
     if (typeof clearLogAnalysisFilter === 'function') clearLogAnalysisFilter();
 

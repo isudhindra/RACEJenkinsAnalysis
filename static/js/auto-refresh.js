@@ -226,7 +226,7 @@ function _updateAutoRefreshButton(on) {
     btn.classList.toggle('auto-refresh-on', !!on);
     btn.classList.toggle('auto-refresh-off', !on);
     const label = btn.querySelector('.btn-auto-refresh-label');
-    if (label) label.textContent = on ? 'Auto-refresh: ON' : 'Auto-refresh: OFF';
+    if (label) label.textContent = on ? 'Auto: ON' : 'Auto: OFF';
 }
 
 // Visibility API — pause when the tab is hidden, resume when it returns.
