@@ -198,16 +198,54 @@ async function clvFetch(jobUrl, buildNum) {
         clvState.cachedSource = isCached;
 
         if (isCached || contentType.includes('text/plain')) {
-            // ── Full response (text/plain) — direct from Jenkins via backend ──
             var loadMsg = document.getElementById('clv-loading-msg');
-            if (loadMsg) loadMsg.textContent = 'Processing console log...';
-            const text = await resp.text();
-            const lines = text.split('\n');
-            for (const line of lines) {
-                if (line.length > 0 || clvState.rawLines.length > 0) {
-                    clvProcessLine(line);
+            var loadDetail = document.getElementById('clv-loading-detail');
+            if (loadMsg) loadMsg.textContent = 'Streaming console log...';
+
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let processed = 0;
+            let sinceYield = 0;
+            const BATCH_LINES = 3000;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                // Split into complete lines; keep the last partial chunk
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (line.length > 0 || clvState.rawLines.length > 0) {
+                        clvProcessLine(line);
+                    }
+                    processed++;
+                    sinceYield++;
+                    if (sinceYield >= BATCH_LINES) {
+                        sinceYield = 0;
+                        if (loadMsg) loadMsg.textContent = 'Processing ' + processed.toLocaleString() + ' lines...';
+                        if (loadDetail) loadDetail.textContent = processed.toLocaleString() + ' lines';
+                        // Yield control to the browser
+                        await new Promise(r => setTimeout(r, 0));
+                        if (controller.signal.aborted) return;
+                    }
                 }
             }
+
+            // Flush trailing partial line + any buffered decoder bytes
+            buffer += decoder.decode();
+            if (buffer.length > 0) {
+                clvProcessLine(buffer);
+                processed++;
+            }
+
+            if (loadMsg) loadMsg.textContent = 'Finalising ' + processed.toLocaleString() + ' lines...';
+            // One more yield so the message paints before clvActivateAnalysis
+            await new Promise(r => setTimeout(r, 0));
+            if (controller.signal.aborted) return;
             clvActivateAnalysis();
         } else {
             // ── SSE stream with progress events ──
@@ -453,14 +491,6 @@ function clvProcessLine(text) {
     clvState.stats.lines++;
 
     // ── Build scenario / test-block structure for Steps view ──
-    //
-    // Cucumber scenarios: opened by cls==='scenario', steps are
-    //   step-pass / step-fail / step-skip, errors attach to last fail.
-    //
-    // Generic test blocks (Playwright, Cypress, Jest, etc.): opened
-    //   by cls==='test-block'. Subsequent errors/stacktraces attach
-    //   to the block. No explicit step sub-items unless the log has them.
-
     if (cls === 'scenario') {
         // Cucumber scenario header
         const name = text.replace(/^.*?Scenario(?:\s+Outline)?:\s*/, '').replace(/\s*#.*$/, '').trim();
@@ -703,8 +733,6 @@ function clvUpdateStats() {
 // Group consecutive error/stacktrace lines into logical blocks for block-based error navigation
 function clvBuildErrorBlocks() {
     // Group consecutive error/stacktrace/step-fail lines into blocks.
-    // A block is a contiguous run of error-related lines (with a gap tolerance
-    // of up to 2 non-error lines to keep closely related content together).
     const blocks = [];
     const errorClasses = new Set(['error', 'stacktrace', 'step-fail']);
     let current = null;
@@ -1039,6 +1067,7 @@ function clvHighlightSearch() {
     if (!clvState.searchTerm) return;
     const container = document.getElementById('clv-log-container');
     const lines = container.querySelectorAll('.clv-line');
+    const term = clvState.searchTerm;
 
     lines.forEach(lineEl => {
         const textEl = lineEl.querySelector('.clv-line-text');
@@ -1048,7 +1077,6 @@ function clvHighlightSearch() {
         const rawIdx = parseInt(lineEl.dataset.rawIdx, 10);
         const rawText = clvState.rawLines[rawIdx] ? clvState.rawLines[rawIdx].text : textEl.textContent;
         const lower = rawText.toLowerCase();
-        const term = clvState.searchTerm;
 
         if (!lower.includes(term)) return;
 
@@ -1056,18 +1084,11 @@ function clvHighlightSearch() {
         const foldToggle = textEl.querySelector('.clv-fold-toggle');
         const foldHtml = foldToggle ? foldToggle.outerHTML : '';
 
-        // Build highlighted HTML (with linkification on non-match segments)
-        let html = foldHtml;
-        let pos = 0;
-        let idx = lower.indexOf(term, pos);
-        while (idx !== -1) {
-            html += clvLinkifyHtml(escapeHtml(rawText.substring(pos, idx)));
-            html += '<span class="clv-match">' + escapeHtml(rawText.substring(idx, idx + term.length)) + '</span>';
-            pos = idx + term.length;
-            idx = lower.indexOf(term, pos);
-        }
-        html += clvLinkifyHtml(escapeHtml(rawText.substring(pos)));
-        textEl.innerHTML = html;
+        const temp = document.createElement('span');
+        temp.innerHTML = clvLinkifyHtml(escapeHtml(rawText));
+        clvHighlightTermInTextNodes(temp, term);
+
+        textEl.innerHTML = foldHtml + temp.innerHTML;
 
         // Re-bind fold toggle event if it was preserved
         if (foldHtml) {
@@ -1077,6 +1098,57 @@ function clvHighlightSearch() {
             }
         }
     });
+}
+
+// Walk every text node inside `root` and wrap occurrences of `term`
+function clvHighlightTermInTextNodes(root, term) {
+    if (!term) return;
+    const termLow = term.toLowerCase();
+    const termLen = term.length;
+
+    // Collect text nodes upfront — never iterate the walker while mutating
+    const walker = document.createTreeWalker(
+        root, NodeFilter.SHOW_TEXT,
+        {
+            acceptNode: function(node) {
+                // Skip text nodes already inside a clv-match wrapper to keep
+                // re-highlight idempotent.
+                if (node.parentNode && node.parentNode.classList &&
+                    node.parentNode.classList.contains('clv-match')) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        }
+    );
+    const nodes = [];
+    let n;
+    while ((n = walker.nextNode())) nodes.push(n);
+
+    for (const textNode of nodes) {
+        const text = textNode.nodeValue;
+        const lower = text.toLowerCase();
+        let idx = lower.indexOf(termLow);
+        if (idx === -1) continue;
+
+        const frag = document.createDocumentFragment();
+        let pos = 0;
+        while (idx !== -1) {
+            if (idx > pos) {
+                frag.appendChild(document.createTextNode(text.substring(pos, idx)));
+            }
+            const mark = document.createElement('span');
+            mark.className = 'clv-match';
+            mark.textContent = text.substring(idx, idx + termLen);
+            frag.appendChild(mark);
+            pos = idx + termLen;
+            idx = lower.indexOf(termLow, pos);
+        }
+        if (pos < text.length) {
+            frag.appendChild(document.createTextNode(text.substring(pos)));
+        }
+        textNode.parentNode.replaceChild(frag, textNode);
+    }
 }
 
 // Navigate to next/previous search match

@@ -167,6 +167,41 @@ async function initFetchStream(url, body) {
         const decoder = new TextDecoder();
         let buffer = '';
 
+        const dispatchSseLine = (line) => {
+            if (!line.startsWith('data: ')) return;
+            try {
+                const data = JSON.parse(line.substring(6));
+                // Adopt the server's operation ID on first event
+                if (data.operation_id && appState.activeOperationId && appState.activeOperationId.startsWith('op_')) {
+                    appState.activeOperationId = data.operation_id;
+                }
+                if (data.operation_id && data.operation_id !== appState.activeOperationId) {
+                    console.log('Ignoring stale event:', data.operation_id);
+                    return;
+                }
+                // If operation was cancelled (activeOperationId is null), drop all events
+                if (!appState.activeOperationId) return;
+
+                if (data.event_type === 'job_metadata') {
+                    handleJobMetadata(data);
+                } else if (data.event_type === 'job_enriched') {
+                    handleJobEnriched(data);
+                } else if (data.event_type === 'progress_update') {
+                    handleProgressUpdate(data);
+                } else if (data.event_type === 'job_error') {
+                    handleJobError(data);
+                } else if (data.event_type === 'fetch_complete') {
+                    handleFetchComplete(data);
+                } else {
+                    console.warn('[SSE] Unknown event type:', data.event_type, data);
+                    diagLog('warning', 'SSE', 'Unknown event type: ' + data.event_type, { raw: JSON.stringify(data) });
+                }
+            } catch (e) {
+                console.error('Error parsing SSE event:', e);
+                diagLog('error', 'SSE', 'Error parsing SSE event', { stack: e.stack, raw: e.message });
+            }
+        };
+
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -176,41 +211,18 @@ async function initFetchStream(url, body) {
             buffer = lines.pop();
 
             for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const data = JSON.parse(line.substring(6));
-                        // Adopt the server's operation ID on first event
-                        if (data.operation_id && appState.activeOperationId && appState.activeOperationId.startsWith('op_')) {
-                            appState.activeOperationId = data.operation_id;
-                        }
-                        if (data.operation_id && data.operation_id !== appState.activeOperationId) {
-                            console.log('Ignoring stale event:', data.operation_id);
-                            continue;
-                        }
-                        // If operation was cancelled (activeOperationId is null), drop all events
-                        if (!appState.activeOperationId) {
-                            continue;
-                        }
+                dispatchSseLine(line);
+            }
+        }
 
-                        if (data.event_type === 'job_metadata') {
-                            handleJobMetadata(data);
-                        } else if (data.event_type === 'job_enriched') {
-                            handleJobEnriched(data);
-                        } else if (data.event_type === 'progress_update') {
-                            handleProgressUpdate(data);
-                        } else if (data.event_type === 'job_error') {
-                            handleJobError(data);
-                        } else if (data.event_type === 'fetch_complete') {
-                            handleFetchComplete(data);
-                        } else {
-                            console.warn('[SSE] Unknown event type:', data.event_type, data);
-                            diagLog('warning', 'SSE', 'Unknown event type: ' + data.event_type, { raw: JSON.stringify(data) });
-                        }
-                    } catch (e) {
-                        console.error('Error parsing SSE event:', e);
-                        diagLog('error', 'SSE', 'Error parsing SSE event', { stack: e.stack, raw: e.message });
-                    }
-                }
+        // Stream ended — flush any final decoder bytes
+        buffer += decoder.decode();
+        if (buffer.trim().length > 0) {
+            // Treat each non-empty segment as a candidate event.  Most of the
+            // time there is at most one segment here.
+            const tail = buffer.split('\n\n');
+            for (const line of tail) {
+                if (line.length > 0) dispatchSseLine(line);
             }
         }
     } catch (error) {
