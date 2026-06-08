@@ -146,13 +146,15 @@ function escapeHtml(text) {
 
 // Turn plain-text URLs inside already-escaped HTML into clickable links.
 // Used by the console-log viewer to make log URLs navigable.
-const _clvUrlRe = /(?:https?:\/\/|ftp:\/\/)(?:[^\s&<>"'()[\]{}]+|\([^\s&<>"']*\))+/gi;
+const _clvUrlRe = /\b(?:https?:\/\/|ftp:\/\/|www\.)(?:&amp;|[^\s&<>"'()[\]{}]+|\([^\s&<>"']*\))+/gi;
 function clvLinkifyHtml(escapedHtml) {
     return escapedHtml.replace(_clvUrlRe, function(url) {
         // Strip trailing punctuation that is unlikely part of the URL
         let clean = url.replace(/[.,;:!?)>\]]+$/, '');
         // Unescape &amp; back to & for the href attribute
-        const href = clean.replace(/&amp;/g, '&');
+        let href = clean.replace(/&amp;/g, '&');
+        // For www.* matches, prepend https:// so the href is valid
+        if (/^www\./i.test(href)) href = 'https://' + href;
         return '<a class="clv-link" href="' + href + '" target="_blank" rel="noopener noreferrer" title="Open in new tab">' + clean + '</a>';
     });
 }
