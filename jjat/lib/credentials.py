@@ -5,6 +5,10 @@ for real env-var values, and :func:`safe_err` to strip credentials out
 of any exception string before it reaches the browser.
 """
 
+# Defers annotation evaluation so `re.Pattern[str]` doesn't run at
+# import time. Without this, Python 3.8 raises TypeError on the subscript.
+from __future__ import annotations
+
 import os
 import re
 from typing import Final
