@@ -68,9 +68,14 @@ class JenkinsClient:
         self._crumb: Optional[Dict[str, str]] = None
 
     def validate_credentials(self) -> bool:
-        """Return True if Jenkins accepts the supplied credentials."""
+        """Return True if Jenkins actually accepts these credentials.
+
+        Hits /me/api/json — that endpoint requires authentication, so a
+        Jenkins that allows anonymous reads of /api/json can no longer
+        false-positive here. Real fetches downstream will work.
+        """
         try:
-            url = f"{self.base_url}/api/json?tree=_class"
+            url = f"{self.base_url}/me/api/json?tree=id"
             response = self.session.get(url, timeout=self.timeout)
             return response.status_code < 400
         except (requests.Timeout, requests.ConnectionError):

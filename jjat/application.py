@@ -24,6 +24,25 @@ except ImportError:
     # python-dotenv missing — fall back to whatever the shell exported.
     pass
 
+# Boot-time diagnostic: confirm whether env-auth credentials are actually
+# visible to this Python process. Printed once on import; lets the user
+# distinguish "shell var not exported" from "frontend never asks".
+try:
+    from jjat.lib.credentials import ENV_API_KEY_VAR, ENV_USERNAME_VAR, env_credentials
+
+    _env_user, _env_key = env_credentials()
+    if _env_user and _env_key:
+        print(f"[INFO] Env-auth detected — {ENV_USERNAME_VAR}=<set> {ENV_API_KEY_VAR}=<set>")
+    else:
+        _missing = []
+        if not _env_user:
+            _missing.append(ENV_USERNAME_VAR)
+        if not _env_key:
+            _missing.append(ENV_API_KEY_VAR)
+        print(f"[INFO] Env-auth NOT available — missing: {', '.join(_missing)} (manual auth only)")
+except Exception:  # pragma: no cover — defensive, never block startup
+    pass
+
 # Templates / static / config live at the project root, not inside the package.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = PROJECT_ROOT / "templates"

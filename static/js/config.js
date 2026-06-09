@@ -179,14 +179,32 @@ async function authenticateCredentials() {
 // If env credentials are present on the server (JENKINS_TEST_USERNAME / JENKINS_TEST_API_KEY),
 // inject a one-click auth button; otherwise the manual flow stays intact.
 async function checkEnvCredentials() {
+    // Reentrancy guard: if the section already exists (e.g. unlockAuth retry),
+    // there's nothing to inject — keep what's there.
+    if (document.getElementById('env-auth-section')) return;
+
     let data;
     try {
         const resp = await fetch('/api/env-credentials-check');
         data = await resp.json();
-    } catch (_) {
-        return; // Network error — silently fall back to manual auth.
+    } catch (err) {
+        if (typeof diagLog === 'function') {
+            diagLog('warning', 'Auth', '/api/env-credentials-check failed — env-auth button unavailable', { raw: err && err.message });
+        }
+        return;
     }
-    if (!data || !data.available) return;
+    if (!data || !data.available) {
+        // Helps the user spot "vars set in shell but Python doesn't see them" — the most common silent failure.
+        if (typeof diagLog === 'function') {
+            const userVar = (data && data.username_var) || 'JENKINS_TEST_USERNAME';
+            const keyVar = (data && data.api_key_var) || 'JENKINS_TEST_API_KEY';
+            diagLog('info', 'Auth',
+                'Env-auth unavailable — server reports ' + userVar + ' and ' + keyVar +
+                ' not set. If they ARE set in your shell, the launch process didn\'t inherit them ' +
+                '(check `export` in your shell rc file, or set them in .env).');
+        }
+        return;
+    }
 
     const authActions = document.getElementById('auth-actions');
     if (!authActions) return;
@@ -298,6 +316,10 @@ function unlockAuth(e) {
             envBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>Authenticate using Environment Variables';
             envBtn.disabled = false;
         }
+    } else {
+        // First-load probe may have failed (network blip or DOM not ready).
+        // Retry now so the env-auth button still gets a chance to appear.
+        checkEnvCredentials();
     }
 
     const btn = document.getElementById('btn-authenticate');
