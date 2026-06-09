@@ -36,11 +36,15 @@ def safe_err(exc: Exception) -> str:
     return _CREDS_IN_URL_RE.sub("://[REDACTED]@", str(exc))
 
 
+def _scrub(raw: str) -> str:
+    return "".join(c for c in raw.strip() if 32 <= ord(c) < 127)
+
+
 def env_credentials() -> tuple[str, str]:
     """Return the env-auth ``(username, api_key)`` pair, or ``("", "")`` when unset."""
     return (
-        os.environ.get(ENV_USERNAME_VAR, "").strip(),
-        os.environ.get(ENV_API_KEY_VAR, "").strip(),
+        _scrub(os.environ.get(ENV_USERNAME_VAR, "")),
+        _scrub(os.environ.get(ENV_API_KEY_VAR, "")),
     )
 
 

@@ -5,6 +5,8 @@ even on auth failure — the frontend interprets the JSON, never the
 status code. HTTP 5xx is reserved for genuine server errors.
 """
 
+import os
+
 from flask import Blueprint, current_app, jsonify, request
 
 from jjat.lib.credentials import (
@@ -64,7 +66,17 @@ def env_validate_credentials():
             "message": f"Environment credentials are not available — set {ENV_USERNAME_VAR} and {ENV_API_KEY_VAR}",
         }), 200
 
-    print(f"[ENV-AUTH] Validating {username} against {jenkins_url} (timeout={current_app.config['default_timeout']}s)...")
+    # Compare scrubbed length to raw length — any mismatch means the env var
+    # had hidden control chars that would have silently corrupted BasicAuth.
+    raw_user = os.environ.get(ENV_USERNAME_VAR, "")
+    raw_key = os.environ.get(ENV_API_KEY_VAR, "")
+    print(
+        f"[ENV-AUTH] Validating {username} (user_len={len(username)} "
+        f"raw={len(raw_user)}, token_len={len(api_key)} raw={len(raw_key)}) "
+        f"against {jenkins_url} (timeout={current_app.config['default_timeout']}s)..."
+    )
+    if len(username) != len(raw_user.strip()) or len(api_key) != len(raw_key.strip()):
+        print("[ENV-AUTH] WARNING: env var contained non-printable chars — scrubbed before use.")
     try:
         client = make_client(
             {"jenkins_url": jenkins_url, "username": username, "api_token": api_key},
