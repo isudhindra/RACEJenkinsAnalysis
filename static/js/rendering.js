@@ -12,6 +12,50 @@ function renderJobNameCell(job) {
     return `<td class="job-name-cell cell-job-name"><a href="${escapeHtml(job.url)}" target="_blank">${escapeHtml(job.name)}</a></td>`;
 }
 
+// Renders the Trend cell — a 5-square mini timeline of the job's last
+// 5 build statuses, oldest on the left, newest on the right.  Each
+// square is colour-coded by status and carries a hover tooltip with
+// the build number + status + relative date.
+//
+// `recent_builds` arrives in newest-first order from the backend; we
+// reverse it so the eye reads left→right as the chronology.
+const _SPARK_STATUS_CLASS = {
+    'SUCCESS':     'spark-pass',
+    'FAILURE':     'spark-fail',
+    'UNSTABLE':    'spark-unstable',
+    'ABORTED':     'spark-aborted',
+    'IN_PROGRESS': 'spark-running',
+    'NOT_BUILT':   'spark-empty',
+    'UNKNOWN':     'spark-empty',
+};
+const _SPARK_SLOTS = 5;
+
+function renderSparklineCell(job) {
+    const builds = Array.isArray(job.recent_builds) ? job.recent_builds.slice(0, _SPARK_SLOTS) : [];
+    if (!builds.length) {
+        // No recent_builds yet (Stage 1 still running) — render empty slots.
+        let placeholder = '';
+        for (let i = 0; i < _SPARK_SLOTS; i++) placeholder += '<span class="spark-cell spark-empty"></span>';
+        return `<td class="cell-trend"><span class="sparkline">${placeholder}</span></td>`;
+    }
+
+    // Newest-first → oldest-first so the chronology reads left to right.
+    const ordered = builds.slice().reverse();
+    // Pad to 5 with empties on the LEFT (older blanks) when the job is new.
+    while (ordered.length < _SPARK_SLOTS) ordered.unshift(null);
+
+    const cells = ordered.map(b => {
+        if (!b) return '<span class="spark-cell spark-empty" title="(no earlier build)"></span>';
+        const cls = _SPARK_STATUS_CLASS[b.status] || 'spark-empty';
+        const ts = b.timestamp ? new Date(b.timestamp).toLocaleString() : '';
+        const title = `#${b.build_number} · ${b.status}${ts ? ' · ' + ts : ''}`;
+        return `<span class="spark-cell ${cls}" title="${escapeHtml(title)}"></span>`;
+    }).join('');
+
+    return `<td class="cell-trend"><span class="sparkline">${cells}</span></td>`;
+}
+
+
 // Renders test metric columns (total, passed, failed, skipped, errors) with appropriate CSS classes.
 function renderMetricCells(hasMetrics, errors, total, passed, failed, skipped, sourceTag, diag) {
     const dashTip = diag
@@ -217,6 +261,7 @@ function renderJobRow(job) {
         + `<td class="status-cell cell-status">${statusBadge}</td>`
         + renderActionsCell(job)
         + renderMetricCells(hm, errorsCount, totalCount, passedCount, failedCount, skippedCount, sourceTag, diag)
+        + renderSparklineCell(job)
         + `<td class="cell-exec-time">${formatExecTime(job.last_execution_time)}</td>`
         + renderRegressionCell(job)
         + `<td class="col-evidence cell-meta hidden">${escapeHtml(evidenceText)}</td>`
@@ -259,6 +304,16 @@ function updateJobRow(jobId, job) {
     }
     const totalCell = row.querySelector('.cell-total');
     if (totalCell) totalCell.innerHTML = hm ? effectiveTotal(m) + sourceTag : '—';
+
+    // Trend sparkline — rebuild from the latest recent_builds window so
+    // refreshes / re-runs surface new build statuses immediately.
+    const trendCell = row.querySelector('.cell-trend');
+    if (trendCell) {
+        const tmp = document.createElement('tr');
+        tmp.innerHTML = renderSparklineCell(job);
+        const fresh = tmp.querySelector('.cell-trend');
+        if (fresh) trendCell.innerHTML = fresh.innerHTML;
+    }
 
     const execTimeCell = row.querySelector('.cell-exec-time');
     if (execTimeCell) execTimeCell.innerHTML = formatExecTime(job.last_execution_time);

@@ -1,0 +1,46 @@
+# ─── Timeout rules ────────────────────────────────────────────────────────
+# Anything where the test or page exceeded its allowed wait window.
+# Priority band: 18-22 (TIER 1 — specific, high-confidence matches).
+#
+# Schema reminder: name, priority, domain, subcategory, impact, label,
+# patterns (list of regexes), action, scope.  Full guide:
+# config/rules/HOW-TO-ADD-A-RULE.md
+
+rules:
+  - name: "selenium_wait_timeout"
+    priority: 18
+    domain: "Timeout"
+    subcategory: "WebDriver Wait Timeout"
+    impact: "Test Issue"
+    label: "Wait Timeout"
+    patterns:
+      - "org\\.openqa\\.selenium\\.TimeoutException"
+      - "Expected condition failed: waiting for"
+      - "Timed out after \\d+ seconds waiting for"
+    action: "Explicit wait expired. Page or element took longer than expected — check app performance and wait duration."
+    scope: "global"
+
+  - name: "page_load_timeout"
+    priority: 20
+    domain: "Timeout"
+    subcategory: "Page Load Timeout"
+    impact: "Infrastructure Likely"
+    label: "Page Load Timeout"
+    patterns:
+      - "page load timed out"
+      - "Navigation timeout"
+      - "Timeout loading page"
+    action: "Page didn't finish loading. Check app/server response time and network."
+    scope: "global"
+
+  - name: "serenity_step_timeout"
+    priority: 22
+    domain: "Timeout"
+    subcategory: "Serenity Step Timeout"
+    impact: "Test Issue"
+    label: "Step Timeout"
+    patterns:
+      - "serenity\\.step\\.timeout"
+      - "Step timed out after"
+    action: "Serenity step exceeded its time budget. Tune step or app performance."
+    scope: "global"

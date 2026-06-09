@@ -1,7 +1,4 @@
 {
-  "name": "Frontend Regression — Pre-Prod",
-  "description": "Frontend regression pack for pre-production validation",
-  "environment": "PRE-PROD",
   "jobs": [
     "frontend-plp-regression-preprod",
     "frontend-pdp-regression-preprod",

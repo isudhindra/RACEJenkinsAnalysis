@@ -147,6 +147,7 @@ function updateSummaryBar() {
     motionRevealKPI();
 }
 
+
 // Show a warning banner when more than 30% of jobs have incomplete data,
 // indicating that Jenkins may have timed out or been rate-limited.
 function checkDegradedMode(jobs) {

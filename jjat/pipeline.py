@@ -1,11 +1,29 @@
 
 import logging
 import re
-from typing import Callable, Dict, List, Optional, Tuple
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import Callable, Dict, List, Optional, Tuple
 
 import yaml
+
+# ---------------------------------------------------------------------------
+# Worker-count defaults — single source of truth.
+#
+# Every module that needs a "how many concurrent fetches" value imports
+# from here instead of carrying its own literal.  That kills the
+# silent-drift bug where four files each had their own fallback (one
+# was 15, the rest 24).
+#
+# The cap of 64 is a soft Jenkins-friendliness ceiling: typical Jenkins
+# masters handle 20-40 concurrent API requests comfortably; beyond 64
+# you'll start seeing 429/503 rate-limits or master CPU saturation
+# before any local speedup.
+# ---------------------------------------------------------------------------
+DEFAULT_WORKERS = 24
+MIN_WORKERS = 1
+MAX_WORKERS = 64
 
 # Module logger.
 _log = logging.getLogger("jenkins.metrics")
@@ -16,27 +34,25 @@ if not _log.handlers:
     _log.setLevel(logging.INFO)
     _log.propagate = False
 
-from models import (
-    JobRecord,
-    BuildInfo,
+from jjat.jenkins_client import JenkinsClient, JenkinsClientError
+from jjat.models import (
+    AnalysisLabel,
     BuildStatus,
+    ClassificationResult,
+    ConfidenceLevel,
+    DataCompleteness,
+    ErrorLogEntry,
+    FailureEvidence,
     HealthState,
-    TestMetrics,
-    ThreeRunContext,
+    JobRecord,
+    RuleDefinition,
+    SecondaryHint,
     SSEEvent,
     SSEEventType,
     StageCompletion,
-    DataCompleteness,
-    ConfidenceLevel,
-    FailureEvidence,
-    ErrorLogEntry,
-    ClassificationResult,
-    AnalysisLabel,
-    RuleDefinition,
-    SecondaryHint,
+    TestMetrics,
+    ThreeRunContext,
 )
-from jenkins_client import JenkinsClient, JenkinsClientError
-
 
 # ============================================================================
 # CLASSIFICATION ENGINE
@@ -50,18 +66,34 @@ class Classifier:
         Initialize the classifier.
 
         Args:
-            rules_path: Path to the YAML file containing classification rules.
+            rules_path: Either a single YAML file, or a directory of split
+                rule files.  When a directory is passed, every ``*.yaml``
+                file in it is loaded and merged:
+
+                * ``_meta.yaml`` (filename prefixed with underscore) holds
+                  cross-cutting fields — ``fallback_labels`` and
+                  ``domain_colors`` — but no rules.
+                * Every other YAML file contains a ``rules:`` list scoped
+                  to one domain (timeout, ui-locator, automation, …).
+
+                Single-file mode (the historical form) is still supported
+                for tests and quick experiments.
 
         Raises:
-            FileNotFoundError: If rules file does not exist.
-            ValueError: If rules file is invalid or contains missing required fields.
+            FileNotFoundError: If the path doesn't exist.
+            ValueError: If a file is malformed, a required field is
+                missing, or two rules share the same name across files.
         """
         self.rules: List[RuleDefinition] = []
         self.fallback_labels: Dict[str, str] = {}
         self.domain_colors: Dict[str, str] = {}
         self._compiled_patterns: dict = {}
 
-        self._load_rules_file(rules_path)
+        import os
+        if os.path.isdir(rules_path):
+            self._load_rules_dir(rules_path)
+        else:
+            self._load_rules_file(rules_path)
 
         # Pre-compile regex patterns for each rule
         for rule in self.rules:
@@ -334,6 +366,157 @@ class Classifier:
         # Multiple domains OR generic pattern → PARTIAL
         return ConfidenceLevel.PARTIAL
 
+    def _parse_rules_list(self, rules_data: list, *, source: str) -> List[RuleDefinition]:
+        """Validate + construct RuleDefinition objects from a YAML list.
+
+        Shared by single-file mode (_load_rules_file) and multi-file
+        mode (_load_rules_dir) so the validation logic lives in exactly
+        one place.
+
+        Args:
+            rules_data: Decoded YAML list (each item is a rule dict).
+            source: Human-readable origin ("rules.yaml" or "08-automation.yaml")
+                used in error messages.
+
+        Returns:
+            List of RuleDefinition objects (unsorted).
+
+        Raises:
+            ValueError: If any rule fails field-level validation.
+        """
+        out: List[RuleDefinition] = []
+        required = ["name", "priority", "domain", "subcategory", "impact", "patterns", "action"]
+
+        for idx, rule_dict in enumerate(rules_data):
+            for fld in required:
+                if fld not in rule_dict:
+                    raise ValueError(
+                        f"{source}: rule at index {idx} missing required field '{fld}'"
+                    )
+
+            if not isinstance(rule_dict["name"], str):
+                raise ValueError(f"{source}: rule {idx} 'name' must be a string")
+            if not isinstance(rule_dict["priority"], int) or rule_dict["priority"] < 0:
+                raise ValueError(f"{source}: rule {idx} 'priority' must be a non-negative integer")
+            if not isinstance(rule_dict["domain"], str):
+                raise ValueError(f"{source}: rule {idx} 'domain' must be a string")
+            if not isinstance(rule_dict["subcategory"], str):
+                raise ValueError(f"{source}: rule {idx} 'subcategory' must be a string")
+            if not isinstance(rule_dict["impact"], str):
+                raise ValueError(f"{source}: rule {idx} 'impact' must be a string")
+            if not isinstance(rule_dict["patterns"], list) or not rule_dict["patterns"]:
+                raise ValueError(f"{source}: rule {idx} 'patterns' must be a non-empty list")
+            if not isinstance(rule_dict["action"], str):
+                raise ValueError(f"{source}: rule {idx} 'action' must be a string")
+
+            for pidx, pattern_str in enumerate(rule_dict["patterns"]):
+                if not isinstance(pattern_str, str):
+                    raise ValueError(
+                        f"{source}: rule {idx} pattern {pidx} must be a string"
+                    )
+                try:
+                    re.compile(pattern_str)
+                except re.error as e:
+                    raise ValueError(
+                        f"{source}: rule {idx} pattern {pidx} invalid regex: {e}"
+                    )
+
+            scope = rule_dict.get("scope", "global")
+            if not isinstance(scope, str):
+                raise ValueError(f"{source}: rule {idx} 'scope' must be a string")
+
+            label = rule_dict.get("label", "")
+            if not isinstance(label, str):
+                raise ValueError(f"{source}: rule {idx} 'label' must be a string")
+
+            out.append(RuleDefinition(
+                name=rule_dict["name"],
+                priority=rule_dict["priority"],
+                domain=rule_dict["domain"],
+                subcategory=rule_dict["subcategory"],
+                impact=rule_dict["impact"],
+                patterns=rule_dict["patterns"],
+                action=rule_dict["action"],
+                label=label,
+                scope=scope,
+            ))
+        return out
+
+    def _load_rules_dir(self, rules_dir: str) -> None:
+        """Load every YAML file in ``rules_dir`` and merge into self.rules.
+
+        File naming convention:
+
+        * ``_meta.yaml`` (or any filename starting with ``_``) holds
+          ``fallback_labels`` and ``domain_colors`` only — no rules.
+        * Every other ``*.yaml`` file holds a ``rules:`` list scoped to
+          one domain.  Filename prefix (``01-``, ``02-``, …) is purely
+          display ordering when listing the directory.
+
+        Validations:
+
+        * Rule names must be unique across ALL files.  A duplicate
+          raises ValueError with the conflicting files named.
+        * Each file's rules go through the same field-level checks as
+          single-file mode (delegated to _load_rules_file).
+        """
+        import glob
+        import os
+
+        files = sorted(glob.glob(os.path.join(rules_dir, "*.yaml")))
+        if not files:
+            raise FileNotFoundError(f"No YAML files found in rules directory: {rules_dir}")
+
+        all_rules: List[RuleDefinition] = []
+        seen_names: Dict[str, str] = {}  # rule name → file that defined it
+        meta_loaded = False
+
+        for path in files:
+            basename = os.path.basename(path)
+            try:
+                with open(path) as f:
+                    data = yaml.safe_load(f) or {}
+            except yaml.YAMLError as e:
+                raise ValueError(f"Invalid YAML in {path}: {e}")
+
+            if not isinstance(data, dict):
+                raise ValueError(f"{path}: top level must be a YAML mapping")
+
+            # Meta file: only fallback_labels + domain_colors.  Allowed in
+            # any file actually, but `_meta.yaml` is the canonical home.
+            if "fallback_labels" in data:
+                self.fallback_labels.update(data["fallback_labels"])
+            if "domain_colors" in data:
+                self.domain_colors.update(data["domain_colors"])
+            if basename.startswith("_"):
+                meta_loaded = True
+                continue  # meta-only file, skip rules processing
+
+            rules_data = data.get("rules", [])
+            if not isinstance(rules_data, list):
+                raise ValueError(f"{path}: 'rules' must be a list")
+
+            file_rules = self._parse_rules_list(rules_data, source=basename)
+            for r in file_rules:
+                if r.name in seen_names:
+                    raise ValueError(
+                        f"Duplicate rule name '{r.name}' — defined in "
+                        f"both {seen_names[r.name]} and {basename}"
+                    )
+                seen_names[r.name] = basename
+            all_rules.extend(file_rules)
+
+        if not all_rules:
+            raise ValueError(f"No rules found in any file under {rules_dir}")
+
+        # Sort by priority ascending (lower number = higher precedence).
+        all_rules.sort(key=lambda r: r.priority)
+        self.rules = all_rules
+
+        if not meta_loaded:
+            # Not fatal — but warn that the user has no cross-cutting metadata.
+            print(f"[INFO] No _meta.yaml in {rules_dir}; fallback_labels / domain_colors empty")
+
     def _load_rules_file(self, rules_path: str) -> None:
         """
         Load and validate classification rules, fallback labels, and domain
@@ -348,7 +531,7 @@ class Classifier:
             ValueError: If YAML is invalid or rules have missing required fields.
         """
         try:
-            with open(rules_path, "r") as f:
+            with open(rules_path) as f:
                 data = yaml.safe_load(f)
         except FileNotFoundError:
             raise FileNotFoundError(f"Rules file not found: {rules_path}")
@@ -366,75 +549,9 @@ class Classifier:
         if not isinstance(rules_data, list):
             raise ValueError("'rules' key must contain a list")
 
-        rules: List[RuleDefinition] = []
-
-        for idx, rule_dict in enumerate(rules_data):
-            # Validate required fields
-            required_fields = [
-                "name",
-                "priority",
-                "domain",
-                "subcategory",
-                "impact",
-                "patterns",
-                "action",
-            ]
-            for fld in required_fields:
-                if fld not in rule_dict:
-                    raise ValueError(
-                        f"Rule at index {idx} missing required field: {fld}"
-                    )
-
-            # Validate field types and values
-            if not isinstance(rule_dict["name"], str):
-                raise ValueError(f"Rule {idx}: 'name' must be a string")
-            if not isinstance(rule_dict["priority"], int) or rule_dict["priority"] < 0:
-                raise ValueError(f"Rule {idx}: 'priority' must be a non-negative integer")
-            if not isinstance(rule_dict["domain"], str):
-                raise ValueError(f"Rule {idx}: 'domain' must be a string")
-            if not isinstance(rule_dict["subcategory"], str):
-                raise ValueError(f"Rule {idx}: 'subcategory' must be a string")
-            if not isinstance(rule_dict["impact"], str):
-                raise ValueError(f"Rule {idx}: 'impact' must be a string")
-            if not isinstance(rule_dict["patterns"], list) or not rule_dict["patterns"]:
-                raise ValueError(f"Rule {idx}: 'patterns' must be a non-empty list")
-            if not isinstance(rule_dict["action"], str):
-                raise ValueError(f"Rule {idx}: 'action' must be a string")
-
-            # Validate patterns are strings and compile them to check for regex errors
-            for pidx, pattern_str in enumerate(rule_dict["patterns"]):
-                if not isinstance(pattern_str, str):
-                    raise ValueError(
-                        f"Rule {idx} pattern {pidx}: pattern must be a string"
-                    )
-                try:
-                    re.compile(pattern_str)
-                except re.error as e:
-                    raise ValueError(
-                        f"Rule {idx} pattern {pidx}: invalid regex: {e}"
-                    )
-
-            # Get optional fields
-            scope = rule_dict.get("scope", "global")
-            if not isinstance(scope, str):
-                raise ValueError(f"Rule {idx}: 'scope' must be a string")
-
-            label = rule_dict.get("label", "")
-            if not isinstance(label, str):
-                raise ValueError(f"Rule {idx}: 'label' must be a string")
-
-            rule = RuleDefinition(
-                name=rule_dict["name"],
-                priority=rule_dict["priority"],
-                domain=rule_dict["domain"],
-                subcategory=rule_dict["subcategory"],
-                impact=rule_dict["impact"],
-                patterns=rule_dict["patterns"],
-                action=rule_dict["action"],
-                label=label,
-                scope=scope,
-            )
-            rules.append(rule)
+        # Delegate per-rule validation + construction to the shared parser
+        # so single-file mode and multi-file mode stay byte-identical.
+        rules = self._parse_rules_list(rules_data, source=rules_path)
 
         # Sort by priority ascending (lower priority number = higher precedence)
         rules.sort(key=lambda r: r.priority)
@@ -655,7 +772,7 @@ class AnalysisOrchestrator:
         self,
         client: JenkinsClient,
         classifier: Classifier,
-        max_workers: int = 24,
+        max_workers: int = DEFAULT_WORKERS,
         promotion_time: Optional[datetime] = None,
     ) -> None:
         """
@@ -677,6 +794,22 @@ class AnalysisOrchestrator:
         self.promotion_time = promotion_time
         # Internal record store — maps job_url to JobRecord for Stage 2 access
         self._records: Dict[str, JobRecord] = {}
+        # Cancellation flag.  When set, worker entry points return early
+        # and the as_completed loops in run_stage_1 / run_stage_2 break
+        # out instead of consuming further results.  In-flight Jenkins
+        # calls finish naturally (we can't cancel futures atomically on
+        # Python 3.8), but no further events get emitted for the
+        # superseded operation.
+        self._cancel_flag = threading.Event()
+
+    def cancel(self) -> None:
+        """Signal worker threads + as_completed loops to stop ASAP.
+
+        Idempotent.  Called by the SSE driver when ``operation_id`` no
+        longer matches the active operation (a newer fetch superseded
+        this one).
+        """
+        self._cancel_flag.set()
 
     def run_stage_1(
         self,
@@ -704,7 +837,7 @@ class AnalysisOrchestrator:
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
-                executor.submit(self._process_stage_1_job, job): job
+                executor.submit(self._stage_1_worker, job): job
                 for job in jobs
             }
 
@@ -712,10 +845,21 @@ class AnalysisOrchestrator:
             total_count = len(jobs)
 
             for future in as_completed(futures):
+                # If a newer operation has superseded us, stop consuming
+                # results.  In-flight workers will exit on their own at
+                # the top of _stage_1_worker (cancel flag check).  We
+                # don't bother emitting events the consumer no longer
+                # cares about.
+                if self._cancel_flag.is_set():
+                    break
+
                 job = futures[future]
 
                 try:
                     record = future.result()
+                    if record is None:
+                        # Worker bailed early due to cancellation — skip silently.
+                        continue
                     results.append(record)
                     self._records[record.job_url] = record
 
@@ -801,7 +945,7 @@ class AnalysisOrchestrator:
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
-                executor.submit(self._process_stage_2_job, record): record
+                executor.submit(self._stage_2_worker, record): record
                 for record in failed_records
             }
 
@@ -809,6 +953,8 @@ class AnalysisOrchestrator:
             total_count = len(failed_records)
 
             for future in as_completed(futures):
+                if self._cancel_flag.is_set():
+                    break
                 record = futures[future]
 
                 try:
@@ -874,6 +1020,22 @@ class AnalysisOrchestrator:
 
         return record
 
+    # Worker wrappers — give the as_completed loop a cancellation seam
+    # without polluting the per-job business logic.  When the cancel
+    # flag is set BEFORE a worker starts, the wrapper returns None and
+    # the loop skips this future.  In-flight workers complete their
+    # current Jenkins call and exit naturally.
+
+    def _stage_1_worker(self, job: dict):
+        if self._cancel_flag.is_set():
+            return None
+        return self._process_stage_1_job(job)
+
+    def _stage_2_worker(self, record: JobRecord):
+        if self._cancel_flag.is_set():
+            return None
+        return self._process_stage_2_job(record)
+
     def _process_stage_1_job(self, job: dict) -> JobRecord:
         """
         Per-job Stage 1 logic (metadata collection + console metric extraction).
@@ -907,10 +1069,13 @@ class AnalysisOrchestrator:
         # 1. Fetch latest build info (required — propagate error)
         latest = self.client.fetch_build_info(job_url, "lastBuild")
 
-        # 2. Fetch the recent build window UP-FRONT 
+        # 2. Fetch the recent build window UP-FRONT
         recent_builds = []
         try:
-            recent_builds = self.client.fetch_recent_builds(job_url, count=3)
+            # Window of 5 — three_run_context still uses [0..2] for
+            # latest / previous / last_passed; the extra entries power the
+            # sparkline column on the frontend.
+            recent_builds = self.client.fetch_recent_builds(job_url, count=5)
         except JenkinsClientError:
             pass  # Silently skip — context will be partial
 
@@ -1003,7 +1168,13 @@ class AnalysisOrchestrator:
 
         # Stamp the diagnostic breadcrumb on the metrics record and emit
         # a single log line so operators can grep stdout for the pattern.
-        test_metrics.metrics_diagnostic = ",".join(diag)
+        # Cap at the last 10 entries + 500 chars to keep memory bounded
+        # across large fetch universes (without a cap, retries against a
+        # slow Jenkins can balloon diag into KB per record).
+        diag_str = ",".join(diag[-10:])
+        if len(diag_str) > 500:
+            diag_str = diag_str[:497] + "..."
+        test_metrics.metrics_diagnostic = diag_str
         if test_metrics.metrics_unavailable:
             _log.warning(
                 "MISSING [%s] build#%s status=%s diag=%s",
@@ -1173,14 +1344,13 @@ class AnalysisOrchestrator:
 
         if status == BuildStatus.SUCCESS:
             return HealthState.PASSED
-        elif status == BuildStatus.FAILURE:
+        if status == BuildStatus.FAILURE:
             return HealthState.FAILED
-        elif status == BuildStatus.UNSTABLE:
+        if status == BuildStatus.UNSTABLE:
             return HealthState.UNSTABLE
-        elif status == BuildStatus.ABORTED:
+        if status == BuildStatus.ABORTED:
             return HealthState.ABORTED
-        else:
-            return HealthState.UNKNOWN
+        return HealthState.UNKNOWN
 
     def _determine_data_completeness(
         self,

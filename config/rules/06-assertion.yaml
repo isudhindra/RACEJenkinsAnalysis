@@ -1,0 +1,44 @@
+# ─── Assertion rules ──────────────────────────────────────────────────────
+# JUnit / Hamcrest / AssertJ assertion failures — actual value didn't
+# match expected.  These could be real product regressions OR stale test
+# expectations; the classification just identifies the framework.
+# Priority band: 24-28 (TIER 1).
+
+rules:
+  - name: "junit_assertion"
+    priority: 24
+    domain: "Assertion"
+    subcategory: "JUnit Assertion"
+    impact: "Test Issue"
+    label: "Assertion Failed"
+    patterns:
+      - "java\\.lang\\.AssertionError"
+      - "org\\.junit\\.ComparisonFailure"
+      - "expected:.*<.*> but was:.*<.*>"
+    action: "Actual value didn't match expected. Compare expected vs. actual — could be a real product regression or a stale test expectation."
+    scope: "global"
+
+  - name: "hamcrest_assertion"
+    priority: 26
+    domain: "Assertion"
+    subcategory: "Hamcrest Assertion"
+    impact: "Test Issue"
+    label: "Hamcrest Mismatch"
+    patterns:
+      - "Expected:\\s.*\\s+but:\\s+was"
+      - "org\\.hamcrest\\."
+    action: "Hamcrest matcher failed. Diff Expected/but-was values against current app behavior."
+    scope: "global"
+
+  - name: "assertj_assertion"
+    priority: 28
+    domain: "Assertion"
+    subcategory: "AssertJ Assertion"
+    impact: "Test Issue"
+    label: "AssertJ Failure"
+    patterns:
+      - "org\\.assertj\\.core\\."
+      - "Expecting.*to be equal to"
+      - "Expecting actual:"
+    action: "AssertJ assertion failed. Review the soft-assert / chained condition that fired."
+    scope: "global"

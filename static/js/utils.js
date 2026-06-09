@@ -9,8 +9,20 @@ function show(id) { const el = $id(id); if (el) el.classList.remove('hidden'); }
 function hide(id) { const el = $id(id); if (el) el.classList.add('hidden'); }
 function setText(id, text) { const el = $id(id); if (el) el.textContent = text; }
 function setHtml(id, html) { const el = $id(id); if (el) el.innerHTML = html; }
-function showError(id, msg) { const el = $id(id); if (el) { el.textContent = msg; el.style.display = 'block'; } }
-function hideError(id) { const el = $id(id); if (el) el.style.display = 'none'; }
+function showError(id, msg) { const el = $id(id); if (el) { el.textContent = msg; el.classList.remove('hidden'); el.style.display = ''; } }
+function hideError(id) { const el = $id(id); if (el) el.classList.add('hidden'); }
+
+// Canonical visibility toggle.  Accepts either an element or an id, and
+// any other code should prefer this over direct style.display = 'none'
+// mutations — the inline-style pattern doesn't compose with .hidden
+// class toggles (removing the class can't undo an inline display:none).
+// Defensively clears any lingering inline display when revealing.
+function setVisible(elOrId, visible) {
+    const el = (typeof elOrId === 'string') ? $id(elOrId) : elOrId;
+    if (!el) return;
+    el.classList.toggle('hidden', !visible);
+    if (visible && el.style.display === 'none') el.style.display = '';
+}
 
 // Return an HTML snippet for a single test-metric cell value.
 // Shows a muted "0" when the count is zero, or a coloured span otherwise.

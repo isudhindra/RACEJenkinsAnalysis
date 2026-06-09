@@ -657,47 +657,57 @@ function clvOnBodyScroll() {
     }, 150);
 }
 
-// Remove DOM lines far outside viewport to keep memory usage low on large logs
+// Remove DOM lines far outside viewport to keep memory usage low on
+// large logs.  Two passes (top / bottom) collect the doomed nodes into
+// an array first, then remove them in a single batch — without this,
+// each remove() inside the while-loop forces a layout recalculation,
+// and a fast scroll on a 50k-line log triggers hundreds of reflows in
+// the 150ms recycle window.
 function clvRecycleDom() {
-    // Only recycle if we have a lot of rendered lines
     const container = document.getElementById('clv-log-container');
     const body = document.getElementById('clv-body');
     if (!container || !body) return;
 
     const children = container.children;
-    if (children.length < clvState.domWindowSize * 1.2) return; // Not enough to bother
+    const overflow = children.length - clvState.domWindowSize;
+    if (overflow < clvState.domWindowSize * 0.2) return; // Not enough to bother
 
     const bodyRect = body.getBoundingClientRect();
     const buffer = bodyRect.height * 2; // Keep 2 viewport heights above and below
 
-    let removedTop = 0;
-    let removedBottom = 0;
-
-    // Remove lines far above the viewport
-    while (children.length > clvState.domWindowSize) {
-        const first = children[0];
-        if (!first) break;
-        const rect = first.getBoundingClientRect();
+    // Read pass — collect refs to remove, no DOM mutation yet so the
+    // layout that getBoundingClientRect() reads stays consistent across
+    // every measurement in this batch.
+    const toRemove = [];
+    let i = 0;
+    while (i < overflow && i < children.length) {
+        const node = children[i];
+        const rect = node.getBoundingClientRect();
         if (rect.bottom < bodyRect.top - buffer) {
-            first.remove();
-            removedTop++;
+            toRemove.push(node);
+            i++;
+        } else {
+            break;
+        }
+    }
+    let j = children.length - 1;
+    let bottomBudget = overflow - toRemove.length;
+    while (bottomBudget > 0 && j >= 0) {
+        const node = children[j];
+        const rect = node.getBoundingClientRect();
+        if (rect.top > bodyRect.bottom + buffer) {
+            toRemove.push(node);
+            bottomBudget--;
+            j--;
         } else {
             break;
         }
     }
 
-    // Remove lines far below the viewport
-    while (children.length > clvState.domWindowSize) {
-        const last = children[children.length - 1];
-        if (!last) break;
-        const rect = last.getBoundingClientRect();
-        if (rect.top > bodyRect.bottom + buffer) {
-            last.remove();
-            removedBottom++;
-        } else {
-            break;
-        }
-    }
+    // Write pass — batch the removals.  Each .remove() still incurs the
+    // browser's tree-mutation work, but no getBoundingClientRect() in
+    // between means no forced reflow per removal.
+    for (const node of toRemove) node.remove();
 }
 
 // Update stats display (line counts, error counts, scenario counts)

@@ -1,0 +1,70 @@
+# ─── UI / Locator rules ───────────────────────────────────────────────────
+# Selector mismatches, stale references, overlay click intercepts, and the
+# UI-specific element-wait timeout (subtly different from a generic
+# WebDriver wait — usually thrown by a Serenity step rather than
+# Selenium itself).
+# Priority band: 8-16 (TIER 1).
+
+rules:
+  - name: "ui_element_wait_timeout"
+    priority: 8
+    domain: "UI / Locator"
+    subcategory: "Element Wait Timeout"
+    impact: "Test Issue"
+    label: "Element Wait Timeout"
+    patterns:
+      - "Timed out after \\d+ seconds\\. Element not available"
+      - "Timed out after \\d+ seconds waiting for element"
+    action: "UI element didn't appear inside the wait window. Check locator validity, the page-load step preceding this one, and whether the prior action actually fired."
+    scope: "global"
+
+  - name: "selenium_no_such_element"
+    priority: 10
+    domain: "UI / Locator"
+    subcategory: "Element Not Found"
+    impact: "Test Issue"
+    label: "Element Not Found"
+    patterns:
+      - "org\\.openqa\\.selenium\\.NoSuchElementException"
+      - "no such element: Unable to locate element"
+      - "Unable to locate element:\\s*\\{"
+    action: "Locator changed or page not in expected state. Verify selector against current UI and check waits for the preceding step."
+    scope: "global"
+
+  - name: "selenium_stale_element"
+    priority: 12
+    domain: "UI / Locator"
+    subcategory: "Stale Element Reference"
+    impact: "Test Issue"
+    label: "Stale Element"
+    patterns:
+      - "StaleElementReferenceException"
+      - "stale element reference: element is not attached"
+    action: "DOM re-rendered between locate and interact. Re-locate the element inside a retry/wait or use Serenity's resilient element APIs."
+    scope: "global"
+
+  - name: "selenium_click_intercepted"
+    priority: 14
+    domain: "UI / Locator"
+    subcategory: "Click Intercepted"
+    impact: "Test Issue"
+    label: "Click Intercepted"
+    patterns:
+      - "ElementClickInterceptedException"
+      - "element click intercepted"
+      - "Other element would receive the click"
+    action: "Overlay, modal, or sticky element is on top of the target. Add a wait for the blocker to disappear or scroll into view first."
+    scope: "global"
+
+  - name: "selenium_not_interactable"
+    priority: 16
+    domain: "UI / Locator"
+    subcategory: "Not Interactable"
+    impact: "Test Issue"
+    label: "Element Not Interactable"
+    patterns:
+      - "ElementNotInteractableException"
+      - "element not interactable"
+      - "element not visible"
+    action: "Element exists but is hidden, disabled, or off-screen. Verify state guards before the action."
+    scope: "global"

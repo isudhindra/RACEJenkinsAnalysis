@@ -169,18 +169,26 @@ async function initFetchStream(url, body) {
 
         const dispatchSseLine = (line) => {
             if (!line.startsWith('data: ')) return;
+            // Single source of truth for cancellation: the AbortController's
+            // signal.  Drop any event that arrives after abort — the
+            // previous dual-mechanism (activeOperationId + AbortController)
+            // had a race where events between the ID-nulling and the
+            // abort would slip through into a wiped table.
+            if (controller.signal.aborted) return;
             try {
                 const data = JSON.parse(line.substring(6));
-                // Adopt the server's operation ID on first event
+                // Adopt the server's operation ID on first event (used for
+                // diagnostics + the legacy stale-event check below).
                 if (data.operation_id && appState.activeOperationId && appState.activeOperationId.startsWith('op_')) {
                     appState.activeOperationId = data.operation_id;
                 }
-                if (data.operation_id && data.operation_id !== appState.activeOperationId) {
-                    console.log('Ignoring stale event:', data.operation_id);
+                if (data.operation_id && appState.activeOperationId &&
+                    data.operation_id !== appState.activeOperationId) {
+                    // A second fetch started server-side — its events arriving
+                    // after our abort would have shown up here.  Now also guarded
+                    // by controller.signal.aborted above; this is belt-and-braces.
                     return;
                 }
-                // If operation was cancelled (activeOperationId is null), drop all events
-                if (!appState.activeOperationId) return;
 
                 if (data.event_type === 'job_metadata') {
                     handleJobMetadata(data);
@@ -262,6 +270,10 @@ const _rowBatch = {
     skeletonRows: [],   // Currently displayed skeleton placeholder rows
     skeletonCount: 4,   // Number of skeleton rows to show
     isStreaming: false,  // True while SSE stream is active
+    freshTimers: [],     // Pending setTimeout IDs that strip the .row-fresh
+                         // class 1.5s after a chunk is inserted; tracked so
+                         // resetRowBatch() can cancel them and release the
+                         // closure references to discarded rows.
 };
 
 // Show the inline loading indicator below the table
@@ -363,11 +375,33 @@ function flushRowBatch() {
         const staggerBase = Math.min(_rowBatch.insertionCounter * 0.035, 0.7);
         row.style.animationDelay = staggerBase + 's';
         row.dataset.insertionOrder = _rowBatch.insertionCounter++;
+        // .row-fresh gates the cell-fade-in entry animation so it plays
+        // exactly once on insertion.  Without this class, the animation
+        // would re-fire every time a filter toggles display:none → '',
+        // making cells appear blank for ~1s after each filter click.
+        row.classList.add('row-fresh');
         fragment.appendChild(row);
         // Track row insertion for motion stagger calculations
         motionNoteRowInserted();
     });
     tbody.appendChild(fragment);
+
+    // Strip the entry-animation class + inline delay after the animation
+    // (0.5s) plus the longest stagger (0.7s) has had time to settle.  Use
+    // a small buffer so we're safely past the last frame of the animation.
+    // Track the timer ID so resetRowBatch() can cancel it if a new fetch
+    // discards these rows before the animation finishes.
+    const animRows = chunk.map(c => c.row);
+    const timerId = setTimeout(() => {
+        for (const r of animRows) {
+            r.classList.remove('row-fresh');
+            r.style.animationDelay = '';
+        }
+        // Drop this timer's entry so the array doesn't grow unbounded.
+        const idx = _rowBatch.freshTimers.indexOf(timerId);
+        if (idx !== -1) _rowBatch.freshTimers.splice(idx, 1);
+    }, 1500);
+    _rowBatch.freshTimers.push(timerId);
 
     // Observe rows for scroll-reveal (batch — defer to next microtask to avoid layout thrash)
     requestAnimationFrame(() => {
@@ -452,6 +486,10 @@ function endStreamingMode() {
 // Reset the batch buffer state completely for a fresh fetch cycle
 function resetRowBatch() {
     if (_rowBatch.flushRaf) { cancelAnimationFrame(_rowBatch.flushRaf); _rowBatch.flushRaf = null; }
+    // Cancel any pending row-fresh cleanup timers so they don't keep
+    // closure references alive to rows that have been thrown away.
+    for (const t of _rowBatch.freshTimers) clearTimeout(t);
+    _rowBatch.freshTimers = [];
     _rowBatch.queue = [];
     _rowBatch.insertionCounter = 0;
     _rowBatch.totalExpected = 0;
@@ -481,7 +519,13 @@ function handleJobMetadata(data) {
         three_run_context: data.three_run_context || {},
         recent_builds: data.recent_builds || [],
         classification: data.classification || null,
-        failure_evidence: data.failure_evidence || null
+        failure_evidence: data.failure_evidence || null,
+        // Backend computes release_status server-side when promotion_time
+        // is supplied. Keep it on the job so the Release-Status filter
+        // (filters.js matchesFilters) and selection-by-release-status
+        // (selection-enhancements.js) can read it without falling back to
+        // a client-side recompute.
+        release_status: data.release_status || null
     };
 
     appState.lastRefreshTimes.set(jobId, new Date());
@@ -514,6 +558,10 @@ function mergeEnrichmentFields(job, data) {
     if (data.data_completeness) job.data_completeness = data.data_completeness;
     if (data.failure_evidence) job.failure_evidence = data.failure_evidence;
     if (data.recent_builds && data.recent_builds.length) job.recent_builds = data.recent_builds;
+    // release_status is recomputed on the backend any time the payload is
+    // produced with promotion_time set — accept the fresh value whenever
+    // it shows up so the filter dropdown stays accurate after refreshes.
+    if (data.release_status) job.release_status = data.release_status;
 }
 
 // Process a job_enriched event: update a job with analysis results and re-render its row
@@ -555,8 +603,12 @@ function handleJobEnriched(data) {
     }
 
     rebuildLogAnalysisLabelCache();
-    applyFilters();
-    updateSummaryBar();
+    // Use the RAF-debounced scheduler so a burst of enrichment events
+    // collapses to ONE filter+summary pass per frame.  Calling
+    // applyFilters() directly here used to fire 500x per fetch on a
+    // 500-job universe — each pass walks every row and re-applies sort,
+    // which turned enrichment-time into noticeable jank.
+    scheduleFilterSortUpdate();
 }
 
 // Process a progress_update event: update progress bar and stage indicators with fetch status
@@ -587,6 +639,11 @@ function handleProgressUpdate(data) {
     const dot2 = document.getElementById('stage-dot-2');
     const dot3 = document.getElementById('stage-dot-3');
 
+    // Note: data.stage here is the *pipeline phase* ("stage_1" = metadata
+    // fetch, "stage_2" = enrichment) emitted on progress_update events.
+    // It is intentionally lowercase and unrelated to the uppercase
+    // StageCompletion enum ("STAGE_1"/"STAGE_2") that lives on individual
+    // job records — see jjat/models.py StageCompletion docstring.
     if (data.stage === 'stage_1') {
         stageLabel.textContent = 'Fetching Build Results & Test Metrics';
         progressText.textContent = `Retrieving metadata for ${completed} of ${total} jobs...`;
@@ -813,7 +870,13 @@ async function triggerSelectiveRefresh(scope) {
     let jobIds = [];
     const statusMap = { 'failed': 'FAILURE', 'unstable': 'UNSTABLE', 'aborted': 'ABORTED' };
     if (statusMap[scope]) {
-        jobIds = Array.from(appState.jobs.values())
+        // Scope to *visible* jobs only.  The toolbar lives next to the
+        // active filters; users expect "Refresh Failed" to act on the
+        // failed jobs they currently see, not on rows hidden by a search
+        // or status filter.  This matches triggerRerunAllFailed() and the
+        // updateToolbarActions() visibility logic that controls the
+        // button's own enable/disable state.
+        jobIds = (typeof getVisibleJobs === 'function' ? getVisibleJobs() : Array.from(appState.jobs.values()))
             .filter(job => job.latest_status === statusMap[scope])
             .map(job => job.job_id);
     } else if (scope === 'selected') {

@@ -242,6 +242,14 @@ function applyPromotionTime() {
     var input = document.getElementById('promotion-datetime');
     _appliedPromoValue = input ? input.value : '';
 
+    // Warn (non-blocking) if the user picked a future timestamp.  Backend
+    // compute_release_status() correctly returns PENDING for every job in
+    // that case, but the user just sees "all Not Run" with no explanation
+    // — the toast tells them why.  Suppressed when clearing.
+    if (promotionTime && promotionTime.getTime() > Date.now() && typeof showToast === 'function') {
+        showToast('Promotion time is in the future — every job will show as Pending until a build runs after it.', 'warning');
+    }
+
     // Persist under the current environment so switching contexts restores it.
     _persistCurrentEnvValue(_appliedPromoValue);
 
@@ -278,6 +286,14 @@ function applyPromotionTime() {
         if (cbFailed) cbFailed.checked = false;
     }
 
+    // Refresh job.release_status in place using the data already loaded
+    // in the browser — pure JS, no Jenkins round-trip.  Without this,
+    // every job's release_status stays at whatever the original fetch
+    // returned (typically "NA" when promotion wasn't yet set), the
+    // Release-Status filter matches nothing, and the regression badges
+    // and dual-panel KPI render stale values.
+    _recomputeAllReleaseStatusInPlace(promotionTime);
+
     // Recalculate all regression status cells in the table
     recalculateAllRegressionCells(promotionTime);
     // Adjust colspan for detail rows when promotion column is visible
@@ -286,6 +302,72 @@ function applyPromotionTime() {
     updatePromotionPanel(promotionTime);
     // Switch KPI layout between single-column (Job Health) and two-column (with Release Validation)
     toggleKpiLayout();
+
+    // Re-run filters so the Release-Status dropdown's visibility change is
+    // reflected in the table.  Without this, clearing promotion (which sets
+    // appState.filters.releaseStatus = null) leaves rows hidden by a
+    // previously-set release filter; and setting promotion fresh keeps any
+    // stale release filter from a saved view active without re-evaluating.
+    if (typeof applyFilters === 'function') applyFilters();
+
+}
+
+
+// ── Client-side release_status recompute on promotion change ───────────
+//
+// The backend computes release_status server-side when promotion_time
+// is in the request body, but we don't want to re-pull every job from
+// Jenkins just because the user picked a different baseline.  This
+// helper recomputes release_status purely from data already in the
+// browser (recent_builds + three_run_context) using the *exact* same
+// rule as jjat/models.py compute_release_status.  Pure JS, no network,
+// sub-10ms for 500 jobs.
+//
+// Authoritative server values continue to win whenever they arrive
+// (Fetch / Refresh / auto-refresh enrichment all carry promotion_time
+// and overwrite the field via mergeEnrichmentFields).
+
+function _recomputeReleaseStatusForJob(job, promotionTime) {
+    if (!promotionTime) return 'NA';
+
+    // Pool every build we know about for this job, deduped by build_number.
+    // Sources: recent_builds + three_run_context's latest/previous/last_passed.
+    // last_passed is critical — it may be older than the recent window
+    // but still newer than the promotion cutoff, in which case the job
+    // has already passed validation and must NOT report as FAIL.
+    const pool = new Map();
+    function consider(b) {
+        if (!b || b.build_number == null || !b.timestamp) return;
+        if (pool.has(b.build_number)) return;
+        const ts = new Date(b.timestamp);
+        if (isNaN(ts.getTime())) return;
+        pool.set(b.build_number, { status: b.status, timestamp: ts });
+    }
+    if (Array.isArray(job.recent_builds)) job.recent_builds.forEach(consider);
+    const ctx = job.three_run_context;
+    if (ctx) {
+        consider(ctx.latest);
+        consider(ctx.previous);
+        consider(ctx.last_passed);
+    }
+
+    let hasPostPromo = false;
+    let hasPass = false;
+    pool.forEach(b => {
+        if (b.timestamp <= promotionTime) return;
+        hasPostPromo = true;
+        if (b.status === 'SUCCESS') hasPass = true;
+    });
+
+    if (!hasPostPromo) return 'PENDING';
+    return hasPass ? 'PASS' : 'FAIL';
+}
+
+function _recomputeAllReleaseStatusInPlace(promotionTime) {
+    if (!window.appState || !appState.jobs) return;
+    appState.jobs.forEach(job => {
+        job.release_status = _recomputeReleaseStatusForJob(job, promotionTime);
+    });
 }
 
 // Clear the promotion datetime and reset the dashboard

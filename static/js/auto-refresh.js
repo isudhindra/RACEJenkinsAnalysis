@@ -102,7 +102,11 @@ async function _pollOnce() {
         // Tier 2: pull the full record for each changed job so metrics and
         // release_status stay correct.  Reuse the existing request path so
         // promotion_time and credential resolution are identical.
-        await Promise.all(changed.map(_enrichChangedJob));
+        // Cap to 3 in-flight requests at a time — Promise.all with a
+        // 50-job change burst used to fire 50 simultaneous /api/refresh-
+        // single calls, stalling the browser network stack on slower
+        // connections and saturating Jenkins.  Sliding-window pattern.
+        await _runWithConcurrencyLimit(changed, _enrichChangedJob, 3);
 
         // Status / build_number changed → the previous TRIGGERED chip (if
         // any) has done its job; clear it immediately rather than waiting
@@ -120,6 +124,26 @@ async function _pollOnce() {
     } finally {
         window._autoRefresh.inFlight = false;
     }
+}
+
+// Sliding-window concurrency limiter.  Walks `items` and invokes `worker`
+// on each, keeping at most `limit` invocations in flight.  Returns when
+// every item is done.  Errors are caught per-item so one slow/failing
+// refresh doesn't abort the whole batch.
+async function _runWithConcurrencyLimit(items, worker, limit) {
+    let i = 0;
+    async function pump() {
+        while (i < items.length) {
+            const idx = i++;
+            try {
+                await worker(items[idx]);
+            } catch (_) { /* swallow — auto-refresh is best-effort */ }
+        }
+    }
+    const runners = [];
+    const n = Math.min(limit, items.length);
+    for (let k = 0; k < n; k++) runners.push(pump());
+    await Promise.all(runners);
 }
 
 async function _enrichChangedJob(jobUrl) {

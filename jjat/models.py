@@ -7,7 +7,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-
 # ============================================================================
 # ENUMERATIONS
 # ============================================================================
@@ -50,7 +49,16 @@ class SSEEventType(str, Enum):
 
 
 class StageCompletion(str, Enum):
-    """Data completion stages."""
+    """Per-job data completion stages emitted on ``job_metadata`` /
+    ``job_enriched`` SSE events.
+
+    Note: this is **not** the same thing as the ``stage`` field on
+    ``progress_update`` events, which uses lowercase ``stage_1`` /
+    ``stage_2`` to name the pipeline *phase* (metadata fetch vs.
+    enrichment) rather than a per-job state.  Two different concepts
+    happen to share the same field name in two different event types;
+    don't compare values across them.
+    """
     STAGE_1 = "STAGE_1"
     STAGE_2 = "STAGE_2"
 
@@ -275,7 +283,7 @@ class JobRecord:
         # it may be older than the recent window but still newer than the
         # promotion cutoff, in which case the job has already passed
         # validation and must NOT be reported as FAIL.
-        pool: Dict[int, "BuildInfo"] = {}
+        pool: Dict[int, BuildInfo] = {}
         for b in (self.recent_builds or []):
             pool[b.build_number] = b
         if self.three_run_context:

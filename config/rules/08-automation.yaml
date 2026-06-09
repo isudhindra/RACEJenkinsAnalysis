@@ -1,0 +1,84 @@
+# ─── Automation / Framework rules ─────────────────────────────────────────
+# Cucumber-runner specifics (pending / undefined / ambiguous steps) and
+# the low-priority catch-alls at the bottom (cucumber_step_failed, NPE,
+# generic Exception/Error).  The three catch-alls live at priorities
+# 700-900 so any specific match in a higher-priority file always wins.
+# Priority band: 30-34 + 700-900.
+
+rules:
+  - name: "cucumber_pending"
+    priority: 30
+    domain: "Automation / Framework"
+    subcategory: "Pending Step"
+    impact: "Test Issue"
+    label: "Pending Step"
+    patterns:
+      - "io\\.cucumber\\.java\\.PendingException"
+      - "TODO: implement me"
+    action: "Step is marked pending — implementation missing. Implement the step definition."
+    scope: "global"
+
+  - name: "cucumber_undefined_step"
+    priority: 32
+    domain: "Automation / Framework"
+    subcategory: "Undefined Step"
+    impact: "Test Issue"
+    label: "Undefined Step"
+    patterns:
+      - "You can implement missing steps with the snippets below"
+      - "Undefined step:"
+    action: "Cucumber couldn't find a matching step definition. Add the @Given/@When/@Then or fix the feature wording."
+    scope: "global"
+
+  - name: "cucumber_ambiguous_step"
+    priority: 34
+    domain: "Automation / Framework"
+    subcategory: "Ambiguous Step"
+    impact: "Test Issue"
+    label: "Ambiguous Step"
+    patterns:
+      - "io\\.cucumber\\.core\\.runner\\.AmbiguousStepDefinitionsException"
+      - "Two step definitions match"
+    action: "Multiple step definitions match the same Gherkin step. Tighten one of the regex/expressions."
+    scope: "global"
+
+  # ───── Catch-alls (priority ≥ 700) ─────
+  # These match very generic patterns so anything specific in another
+  # file beats them.  Keep priorities in 700-999 reserved for fallbacks
+  # of this kind.
+
+  - name: "cucumber_step_failed"
+    priority: 700
+    domain: "Automation / Framework"
+    subcategory: "Cucumber Step Failed"
+    impact: "Test Issue"
+    label: "Cucumber Step Failed"
+    patterns:
+      - "Test failed at step:"
+      - "Failed scenarios:"
+    action: "A Cucumber step failed but no specific rule matched it. Look at the line beginning 'Test failed at step:' for the failing step and read the lines around it for the immediate cause."
+    scope: "global"
+
+  - name: "generic_npe"
+    priority: 800
+    domain: "Automation / Framework"
+    subcategory: "Null Reference"
+    impact: "Test Issue"
+    label: "NullPointerException"
+    patterns:
+      - "java\\.lang\\.NullPointerException"
+      - "Cannot invoke .* because .* is null"
+    action: "Null reference somewhere in step or page object. Read the stack trace for the offending line."
+    scope: "global"
+
+  - name: "generic_exception"
+    priority: 900
+    domain: "Automation / Framework"
+    subcategory: "Unhandled Exception"
+    impact: "Inconclusive"
+    label: "Unhandled Exception"
+    patterns:
+      - "Exception"
+      - "Error"
+    action: "No specific signature matched. Open the console log and review the stack trace manually."
+    scope: "global"

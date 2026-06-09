@@ -1,0 +1,45 @@
+# ─── Build / Configuration rules ──────────────────────────────────────────
+# Maven/Gradle compile failures, dependency resolution issues, and the
+# "Tests run: 0" no-tests-ran edge case.
+# Priority band: 70-74 (TIER 2).
+
+rules:
+  - name: "compilation_error"
+    priority: 70
+    domain: "Build / Configuration"
+    subcategory: "Compilation Error"
+    impact: "Product Regression Likely"
+    label: "Compilation Failure"
+    patterns:
+      - "COMPILATION ERROR"
+      - "BUILD FAILURE"
+      - "cannot find symbol"
+      - "package .* does not exist"
+    action: "Code doesn't compile. Check recent commits and Maven/Gradle dependency changes."
+    scope: "global"
+
+  - name: "maven_dependency"
+    priority: 72
+    domain: "Build / Configuration"
+    subcategory: "Dependency Resolution"
+    impact: "Test Issue"
+    label: "Dependency Failure"
+    patterns:
+      - "Could not resolve dependencies"
+      - "Failed to read artifact descriptor"
+      - "Non-resolvable parent POM"
+    action: "Maven can't resolve a dependency. Check Nexus/Artifactory access and pom versions."
+    scope: "global"
+
+  - name: "surefire_no_tests"
+    priority: 74
+    domain: "Build / Configuration"
+    subcategory: "No Tests Ran"
+    impact: "Test Issue"
+    label: "No Tests Executed"
+    patterns:
+      - "No tests were executed"
+      - "Tests run: 0, Failures: 0, Errors: 0"
+      - "There are no tests to run"
+    action: "Suite ran with zero tests. Check Cucumber tag filters and test path config."
+    scope: "global"

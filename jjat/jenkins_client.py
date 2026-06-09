@@ -7,15 +7,14 @@ triggering with exponential backoff retry logic.
 """
 
 import time
-from typing import Optional, List, Dict, Any
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import requests
-from requests.auth import HTTPBasicAuth
 from requests.adapters import HTTPAdapter
+from requests.auth import HTTPBasicAuth
 
-from models import BuildInfo, BuildStatus, TestMetrics
-
+from jjat.models import BuildInfo, BuildStatus, TestMetrics
 
 # ============================================================================
 # EXCEPTIONS
@@ -287,20 +286,31 @@ class JenkinsClient:
                 job_url=job_url,
             )
 
+    # Hard cap on console-body bytes per fetch.  Without it, a single
+    # pathological Jenkins build (multi-GB log) can tie up a worker
+    # thread for minutes streaming bytes that no downstream code can
+    # usefully classify — the classifier only ever looks at the tail.
+    _CONSOLE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+
     def fetch_console_full(
         self,
         job_url: str,
         build_number: int,
     ) -> str:
         """
-        Fetch the complete console output for a build.
+        Fetch the complete console output for a build (capped at 10MB).
+
+        Streams the response body and stops reading once
+        :attr:`_CONSOLE_MAX_BYTES` is reached — protects worker threads
+        from runaway Jenkins logs without losing the data the classifier
+        actually uses (which lives in the last several hundred lines).
 
         Args:
             job_url: Full URL to a Jenkins job.
             build_number: Build number (integer).
 
         Returns:
-            Plain text string containing the full console output.
+            Plain text string containing up to 10MB of console output.
             Empty string if console has no content.
 
         Raises:
@@ -309,8 +319,20 @@ class JenkinsClient:
         url = f"{job_url}/{build_number}/consoleText"
 
         try:
-            response = self._request_with_retry("GET", url)
-            return response.text or ""
+            response = self._request_with_retry("GET", url, stream=True)
+            chunks = []
+            total = 0
+            for chunk in response.iter_content(chunk_size=64 * 1024, decode_unicode=False):
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                total += len(chunk)
+                if total >= self._CONSOLE_MAX_BYTES:
+                    break
+            response.close()
+            body = b"".join(chunks)
+            # Decode best-effort — Jenkins consoles can carry mixed encodings.
+            return body.decode("utf-8", errors="replace")
         except JenkinsClientError:
             raise
         except Exception as e:
@@ -741,21 +763,20 @@ class JenkinsClient:
                     if response.status_code == 404:
                         # 404 is special: return the response so caller can handle
                         return response
-                    elif response.status_code == 401:
+                    if response.status_code == 401:
                         raise JenkinsClientError(
                             "Authentication failed",
                             status_code=401,
                         )
-                    elif response.status_code == 403:
+                    if response.status_code == 403:
                         raise JenkinsClientError(
                             "Permission denied",
                             status_code=403,
                         )
-                    else:
-                        raise JenkinsClientError(
-                            f"HTTP {response.status_code}: {response.reason}",
-                            status_code=response.status_code,
-                        )
+                    raise JenkinsClientError(
+                        f"HTTP {response.status_code}: {response.reason}",
+                        status_code=response.status_code,
+                    )
 
                 # 5xx errors: retry
                 if response.status_code >= 500:
@@ -771,7 +792,7 @@ class JenkinsClient:
                 # Success (2xx, 3xx)
                 return response
 
-            except requests.Timeout as e:
+            except requests.Timeout:
                 last_exception = JenkinsClientError(
                     f"Request timeout after {self.timeout}s",
                 )

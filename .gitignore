@@ -8,6 +8,11 @@ pytest-cache-files-*/
 .coverage
 htmlcov/
 
+# Tool caches (auto-regenerated, do not commit)
+.ruff_cache/
+.mypy_cache/
+.tox/
+
 # Virtual environments
 venv/
 .venv/

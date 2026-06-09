@@ -1,7 +1,4 @@
 {
-  "name": "UI Regression — DEV",
-  "description": "Full UI regression suite for development environment",
-  "environment": "DEV",
   "jobs": [
     "ui-regression-checkout-dev",
     "ui-regression-login-dev",

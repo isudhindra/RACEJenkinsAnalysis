@@ -1,0 +1,30 @@
+# ─── Test Data rules ──────────────────────────────────────────────────────
+# Missing records and null/empty test data — usually a setup hook didn't
+# run or the fixture seed didn't take.
+# Priority band: 36-38 (TIER 1).
+
+rules:
+  - name: "test_data_missing"
+    priority: 36
+    domain: "Test Data"
+    subcategory: "Missing Record"
+    impact: "Data Issue"
+    label: "Missing Test Data"
+    patterns:
+      - "(?i)record not found"
+      - "(?i)no data (returned|found)"
+      - "(?i)test data .*(missing|empty|not available)"
+    action: "Required test record is absent. Re-seed test data or verify the data-setup hook ran."
+    scope: "global"
+
+  - name: "test_data_null"
+    priority: 38
+    domain: "Test Data"
+    subcategory: "Null Test Data"
+    impact: "Data Issue"
+    label: "Null Test Data"
+    patterns:
+      - "java\\.lang\\.NullPointerException.*testdata"
+      - "Cannot invoke .* because .* is null"
+    action: "Test data lookup returned null. Check data provider, fixture, or @Before hook output."
+    scope: "global"

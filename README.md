@@ -1,326 +1,253 @@
-<h1 align="center">JJAT - Jenkins Job Analysis Tool</h1>
+<h1 align="center">Jenkins Job Analysis Tool</h1>
 
 <p align="center">
-A local dashboard that pulls live job status from Jenkins, validates each job
-against a release-promotion time, classifies failures from the console log,
-and surfaces everything in one screen.<br>
-<em>Each user runs their own instance.</em>
+A single screen that shows you every Jenkins job's status, explains why the red
+ones failed, and lets you re-run them with one click.<br>
+Runs on your own laptop. Nothing leaves your machine.
 </p>
 
-<p align="center">
-  <a href="#features">Features</a> ·
-  <a href="#prerequisites">Prerequisites</a> ·
-  <a href="#setup">Setup</a> ·
-  <a href="#configure-jenkins-instances">Configure</a> ·
-  <a href="#using-the-dashboard">Use</a> ·
-  <a href="#tuning-fetch-speed">Tuning</a> ·
-  <a href="#troubleshooting">Troubleshooting</a>
-</p>
+<br>
 
----
+## What you can do with it
 
-## Features
+- See all your jobs in one table — green, red, in progress.
+- Read a one-line reason for each failure (timeout, missing data, browser crash, …).
+- Pick a "release time" — the dashboard tells you which jobs **passed**, **need re-running**, or **haven't started yet** for that release.
+- Tick the failed jobs, hit one button, walk away. It re-runs them all.
+- The screen refreshes itself every 30 seconds.
 
-| Business                                          | User                                                          |
-| ------------------------------------------------- | ------------------------------------------------------------- |
-| Faster release go/no-go decisions                 | Pick a promotion time → automatic PASS / PENDING / FAIL       |
-| Earlier visibility of validation gaps             | Failures come pre-classified with evidence inline             |
-| Failure-triage knowledge versioned in the repo    | Background refresh every 30 s, row flashes on change          |
-| No server to run — each engineer hosts their own  | Bulk-select (dropdown, shift+click, paint) + one-click rerun  |
+<br>
 
----
+## Install and run
 
-## Prerequisites
+Pick your operating system below. Each section has two parts: a **first-time setup** you do once, and a **every-time launch** you use afterwards.
 
-- **Python 3.8 or newer**
-- A Jenkins instance you can reach over HTTPS
-- A Jenkins API token &nbsp;·&nbsp; *Jenkins → your user → Configure → API Token*
-
-**Python packages**
-
-| Package    | Version  | Purpose                   |
-| ---------- | -------- | ------------------------- |
-| `Flask`    | `≥ 3.0`  | HTTP server + templating  |
-| `requests` | `≥ 2.31` | Jenkins API client        |
-| `PyYAML`   | `≥ 6.0`  | Loads `config/rules.yaml` |
-
----
-
-## Setup
-
-Pick your OS:
+> In every command, replace `<project-folder>` with the actual name of the folder you got when you cloned the repo or unzipped the download.
 
 <details open>
 <summary><strong>macOS</strong></summary>
 
 &nbsp;
 
-**1. Install** — from the project root:
+### First time only
+
+**1. Install Python.**  In Terminal, run `python3 --version`. If it says 3.8 or newer you're set. Otherwise grab the installer from [python.org/downloads](https://www.python.org/downloads/) and run it.
+
+**2. Go into the project folder, then run everything below in one go.**
 
 ```bash
+cd ~/Downloads/<project-folder>
 python3 -m venv venv
 source venv/bin/activate
-pip install Flask requests PyYAML
+pip install Flask requests PyYAML python-dotenv
+cp .env.example .env          # then open .env and fill in your Jenkins credentials
+bash scripts/setup.sh
 ```
 
-**2. Set credentials** *(optional, recommended)* — add to `~/.zshrc`:
+The last line adds `analyseJenkins` as a shell command for you — written into `~/.zshrc` (or `~/.bash_profile` if you use bash).
+
+**3. Open a new Terminal window**, then start the dashboard from anywhere with:
 
 ```bash
-export JENKINS_NP_USERNAME="your.username"
-export JENKINS_NP_API_KEY1="your-api-token"
+analyseJenkins
 ```
+
+The browser opens at **http://127.0.0.1:5000** automatically.  Press `Ctrl+C` to stop.
+
+### Every time after that
 
 ```bash
-source ~/.zshrc
+analyseJenkins
 ```
-
-> When both vars are set the dashboard shows a one-click **Authenticate
-> with environment credentials** button. Otherwise paste credentials in
-> the UI each time.
-
-**3. Register `analyseJenkins`** *(optional one-command launcher)*:
-
-```bash
-bash setup/setup.sh
-source ~/.zshrc       # or ~/.bash_profile if you're on bash
-```
-
-**4. Run**:
-
-```bash
-python app.py         # or, after step 3:  analyseJenkins
-```
-
-Server starts on **http://127.0.0.1:5000** and your default browser opens
-automatically. `Ctrl+C` to stop.
 
 </details>
 
 <details open>
-<summary><strong>Ubuntu / Linux</strong></summary>
+<summary><strong>Windows</strong></summary>
 
 &nbsp;
 
-**1. Install**:
+### First time only
 
-```bash
-sudo apt update && sudo apt install -y python3-venv python3-pip
-python3 -m venv venv
-source venv/bin/activate
-pip install Flask requests PyYAML
-```
+**1. Install Python.**  In PowerShell, run `py --version`. If it says 3.8 or newer you're set. Otherwise download from [python.org/downloads](https://www.python.org/downloads/) and run the installer — **tick "Add Python to PATH"** on the first screen.
 
-**2. Set credentials** *(optional, recommended)* — add to `~/.bashrc`:
-
-```bash
-export JENKINS_NP_USERNAME="your.username"
-export JENKINS_NP_API_KEY1="your-api-token"
-```
-
-```bash
-source ~/.bashrc
-```
-
-> When both vars are set the dashboard shows a one-click **Authenticate
-> with environment credentials** button. Otherwise paste credentials in
-> the UI each time.
-
-**3. Register `analyseJenkins`** *(optional one-command launcher)*:
-
-```bash
-bash setup/setup.sh
-source ~/.bashrc
-```
-
-**4. Run**:
-
-```bash
-python app.py         # or, after step 3:  analyseJenkins
-```
-
-Server starts on **http://127.0.0.1:5000** and your default browser opens
-automatically. `Ctrl+C` to stop.
-
-> **WSL users**: follow this section, not the Windows one. WSL is a
-> Linux environment.
-
-</details>
-
-<details open>
-<summary><strong>Windows (PowerShell)</strong></summary>
-
-&nbsp;
-
-**1. Install**:
+**2. Go into the project folder, then run everything below in one go.**
 
 ```powershell
+cd C:\path\to\<project-folder>
 py -3 -m venv venv
 venv\Scripts\Activate.ps1
-pip install Flask requests PyYAML
+pip install Flask requests PyYAML python-dotenv
+Copy-Item .env.example .env   # then open .env in Notepad and fill in your Jenkins credentials
+.\scripts\setup.ps1
 ```
 
-> If PowerShell blocks `Activate.ps1`, run once:
+> If PowerShell blocks the `Activate.ps1` script, run this once and then retry:
 > `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`
 
-**2. Set credentials** *(optional, recommended)*:
+The last line adds `analyseJenkins` as a PowerShell command for you — written into your PowerShell `$PROFILE`.
+
+**3. Open a new PowerShell window**, then start the dashboard from anywhere with:
 
 ```powershell
-[Environment]::SetEnvironmentVariable("JENKINS_NP_USERNAME", "your.username", "User")
-[Environment]::SetEnvironmentVariable("JENKINS_NP_API_KEY1", "your-api-token", "User")
+analyseJenkins
 ```
 
-Close and reopen PowerShell so the new variables are picked up.
+The browser opens at **http://127.0.0.1:5000** automatically.  Press `Ctrl+C` to stop.
 
-> When both vars are set the dashboard shows a one-click **Authenticate
-> with environment credentials** button. Otherwise paste credentials in
-> the UI each time.
-
-**3. Register `analyseJenkins`** *(optional one-command launcher)*:
+### Every time after that
 
 ```powershell
-.\setup\setup.ps1
-. $PROFILE
+analyseJenkins
 ```
-
-> PowerShell 5.1 and PowerShell 7+ have separate profiles. If you use
-> both, run `.\setup\setup.ps1` inside each one.
-
-**4. Run**:
-
-```powershell
-python app.py         # or, after step 3:  analyseJenkins
-```
-
-Server starts on **http://127.0.0.1:5000** and your default browser opens
-automatically. `Ctrl+C` to stop.
 
 </details>
 
----
+<details open>
+<summary><strong>Linux / Ubuntu</strong></summary>
 
-## Configure Jenkins instances
+&nbsp;
 
-Edit `config/contexts.json` to add Jenkins servers and predefined job
-lists. Minimal example:
+### First time only
 
-```json
-{
-  "instances": [
-    {
-      "id": "my-jenkins",
-      "display_name": "My Jenkins (SIT)",
-      "jenkins_url": "https://jenkins.example.com",
-      "environment": "SIT",
-      "predefined_job_lists": [
-        {
-          "id": "api-smoke-sit",
-          "name": "API Smoke (SIT)",
-          "job_list_file": "config/job_lists/api-smoke-sit.json",
-          "environment": "SIT",
-          "source_mode": "job_list"
-        }
-      ]
-    }
-  ],
-  "defaults": { "max_workers": 24, "timeout": 30 }
-}
-```
-
-> Job-list files live in `config/job_lists/`. Each is a JSON array of
-> Jenkins job names — see the existing examples in that folder.
-
----
-
-## Tuning fetch speed
-
-Fetch-jobs is I/O-bound — most of each per-job call is the wait on Jenkins.
-The default worker count is **24** parallel threads, which works well for
-most Jenkins masters. If your server can handle more (or less), override
-with an env var before launching:
+**1. Install Python and the venv tooling.**
 
 ```bash
-# macOS / Linux
-export JENKINS_MAX_WORKERS=40
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip
+```
+
+**2. Go into the project folder, then run everything below in one go.**
+
+```bash
+cd ~/<project-folder>
+python3 -m venv venv
+source venv/bin/activate
+pip install Flask requests PyYAML python-dotenv
+cp .env.example .env          # then open .env and fill in your Jenkins credentials
+bash scripts/setup.sh
+```
+
+The last line adds `analyseJenkins` as a shell command for you — written into `~/.bashrc` (or `~/.zshrc` if you use zsh).
+
+**3. Open a new terminal**, then start the dashboard from anywhere with:
+
+```bash
 analyseJenkins
 ```
 
-```powershell
-# Windows
-$Env:JENKINS_MAX_WORKERS = "40"
+The browser opens at **http://127.0.0.1:5000** automatically.  Press `Ctrl+C` to stop.
+
+### Every time after that
+
+```bash
 analyseJenkins
 ```
 
-| Workers | Notes                                                                      |
-| ------- | -------------------------------------------------------------------------- |
-| `15`    | Conservative — old default. Use if your Jenkins is shared/under-provisioned. |
-| `24`    | **Default.** Comfortable for most masters.                                |
-| `40–50` | Aggressive. May trigger `429` / `503` from under-provisioned Jenkins.     |
-| `> 64`  | Rejected — capped to protect against typos that overload the master.       |
+</details>
 
-The HTTP connection pool inside `JenkinsClient` is automatically sized to
-match, so every thread gets a real concurrent socket (default `requests`
-behavior would have queued the overflow).
 
----
+<br>
 
 ## Using the dashboard
 
-| # | Step                  | What to do                                                          |
-| - | --------------------- | ------------------------------------------------------------------- |
-| 1 | **Pick an instance**  | Choose from the config panel at the top                             |
-| 2 | **Authenticate**      | Click the env-creds shortcut, or paste username + token             |
-| 3 | **Fetch jobs**        | Pick a view or predefined list → **Fetch Jobs**                     |
-| 4 | **Validate release**  | *(Optional)* Set a Release Validation time to enable the column     |
-| 5 | **Watch it work**     | Auto-refresh every 30 s — toggle off if you'd rather not            |
+1. **Sign in.** If you've populated `.env` (see below), one button auto-authenticates. Otherwise paste your Jenkins web address, username, and API token. *(Generate the token in Jenkins under your profile → Configure → API Token.)*
+2. **Choose a view** — for example "PRP1 All Jobs" — or pick a saved job list.
+3. **Click Fetch Jobs.** Every job loads with its current status.
+4. **(Optional) Set a release time.** The *Release Status* column lights up with **PASS / PENDING / FAIL** for each job against that moment.
+5. **Re-run the reds.** Tick the failing rows and use the **Rerun** button.
 
----
+That's the whole tool.
 
-## Project layout
+<br>
 
-```text
-.
-├── app.py                  ← Flask app + routes
-├── jenkins_client.py       ← Jenkins HTTP client (auth, retry, CSRF)
-├── pipeline.py             ← Classifier + stage orchestration
-├── models.py               ← Dataclasses + enums
-├── setup/
-│   ├── setup.sh            ← Register analyseJenkins (macOS / Linux)
-│   └── setup.ps1           ← Register analyseJenkins (Windows)
-│
-├── config/
-│   ├── contexts.json       ← Jenkins instances + predefined job lists
-│   ├── rules.yaml          ← Failure-classification rules (hand-edited)
-│   └── job_lists/          ← Per-environment job lists
-│
-├── static/
-│   ├── css/dashboard-theme.css
-│   └── js/                 ← Frontend modules (no build step)
-│
-└── templates/
-    └── dashboard.html
+## Credentials (.env file)
+
+The dashboard reads one Jenkins service-account credential pair from `.env` in the project root:
+
+```
+JENKINS_TEST_USERNAME=svc-account@example.com
+JENKINS_TEST_API_KEY=11abcd…your-jenkins-api-token
 ```
 
----
+The same pair works across every Jenkins environment configured in `config/contexts.json` — once you authenticate, the session covers all further API calls. If the pair is missing or rejected, the manual username + API-token fields appear as a fallback. `.env` is gitignored, so credentials never leave your machine.
 
-## Troubleshooting
+A ready-to-edit template lives at `.env.example`; the install steps above copy it to `.env` for you.
 
-<details>
-<summary><strong>Common issues</strong></summary>
+<br>
 
-&nbsp;
+## Stuck?
 
-| Symptom | Fix |
-| ------- | --- |
-| `python: command not found` (Linux/Mac) | Use `python3` instead. |
-| PowerShell blocks `Activate.ps1` | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` |
-| Port `5000` already in use | Stop the other process, or change the port at the bottom of `app.py`. |
-| Browser shows stale UI after pull / redeploy | Hard-reload (`Cmd+Shift+R` Mac, `Ctrl+Shift+R` Win/Linux). Restarting the server bumps the cache-buster automatically. |
-| Env-creds button doesn't appear | Both `JENKINS_NP_USERNAME` and `JENKINS_NP_API_KEY1` must be set in the **same shell** that launched `python app.py`. |
-| Rerun returns `403` | Your Jenkins requires a CSRF crumb — the client fetches one automatically. If it still fails, check your token has *Job → Build* permission. |
-| `analyseJenkins: command not found` after `setup/setup.sh` | Reload your shell: `source ~/.zshrc` (or `~/.bash_profile`, `~/.bashrc`). Opening a new terminal works too. |
-| `setup/setup.sh` says "doesn't look like the project root" | `cd` into the project folder first, then re-run. |
-| Moved the project, `analyseJenkins` now fails | Re-run `bash setup/setup.sh` (or `.\setup\setup.ps1`) from the new location — it replaces the old entry. |
-| Table cells show `—` for test counts | Hover any dash cell — the tooltip shows why (`api_404,console_no_match` means Jenkins didn't publish a testReport and the console fallback didn't match). Server stdout has matching `[WARNING] jenkins.metrics: MISSING …` lines per job. |
-| Fetch-jobs is slow | Bump worker count: `export JENKINS_MAX_WORKERS=40` (see [Tuning fetch speed](#tuning-fetch-speed)). |
+| If you see this… | Try this |
+|---|---|
+| "python: command not found" | Use `python3` instead, or close and reopen Terminal so PATH updates. |
+| `analyseJenkins: command not found` | Open a fresh terminal window — the shortcut only loads in new shells. |
+| Want to launch the manual way | `cd` into the folder, then `source venv/bin/activate && python app.py` (macOS / Linux) or `venv\Scripts\Activate.ps1 ; python app.py` (Windows). |
+| Dashboard looks weird after an update | Hard-refresh the page: `Cmd+Shift+R` (Mac) or `Ctrl+Shift+R` (Windows / Linux). |
+| Test counts show only "—" | Hover the dash — the tooltip tells you exactly why. |
+| Port 5000 is busy | Close the other app using it, or change the port at the bottom of `app.py`. |
 
-</details>
+<br>
+
+## Try it without Jenkins
+
+There's a built-in demo server with 80+ fake jobs covering every status and failure type. Useful for clicking around before you connect to a real Jenkins.
+
+```bash
+source venv/bin/activate            # or venv\Scripts\Activate.ps1 on Windows
+python mock/mock_server.py
+```
+
+Opens **http://127.0.0.1:5001**.
+
+<br>
+
+
+### Project layout
+
+```
+.
+├── app.py                       ← entry point
+├── pyproject.toml               ← dependencies + Ruff/mypy
+├── jjat/                        ← backend package
+│   ├── application.py           ← Flask factory
+│   ├── jenkins_client.py        ← HTTP client (auth, retry, CSRF)
+│   ├── pipeline.py              ← Classifier + Stage-1 / Stage-2
+│   ├── models.py                ← dataclasses + enums
+│   ├── routes/                  ← one Blueprint per API domain
+│   └── lib/                     ← shared helpers (state, creds, sse, …)
+├── static/  templates/          ← vanilla-JS frontend
+├── config/                      ← contexts.json + rules.yaml
+├── scripts/                     ← setup.sh / setup.ps1
+└── mock/                        ← mock_server.py
+```
+
+### Conventions
+
+- Python files `snake_case.py`; classes `PascalCase`; functions `snake_case`; leading `_` for module-internal.
+- JavaScript files `kebab-case.js`; functions `camelCase`.
+- Hard cap: 400 lines per Python file, 500 per JS file.
+- Layering: `lib/` ← `routes/` ← `application.py`. Never the other direction.
+
+### Adding a new endpoint
+
+1. Open the right file in `jjat/routes/`.
+2. Add the `@bp.route(...)` handler.
+3. (New blueprint?) Register it in `jjat/routes/__init__.py`.
+4. (Shared helper?) Put it in `jjat/lib/`.
+
+### Tuning fetch speed
+
+Two knobs, both `.env`-aware (or `export` if you prefer):
+
+- `JENKINS_MAX_WORKERS` — concurrent Jenkins API calls during a Fetch/Refresh. Default **24**, range **1–64**. Raise on a strong Jenkins (40 is fine); lower if you see HTTP 429/503 or the Jenkins master is under load.
+- `JENKINS_POLL_WORKERS` — concurrency for the background auto-refresh poll (cheap status-only calls). Default **15**, range **1–32**. Tuned separately so polling doesn't compete with user-triggered fetches.
+
+Out-of-range or non-numeric values are silently ignored; the defaults stand.
+
+### If this ever leaves "local laptop" territory
+
+In rough order: gunicorn + nginx, Docker, CI with Ruff/mypy/pytest, dashboard auth, structured logging, rate-limiting, secrets provider.
+
+
+<sub><em>Created by Sudhindra Immidi.</em></sub>

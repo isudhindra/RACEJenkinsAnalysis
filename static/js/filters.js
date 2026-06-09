@@ -895,28 +895,30 @@ function updateLaActiveItem(items) {
     });
 }
 
-// Table-overlay helpers
-let _overlayRefCount = 0;
+// Table-overlay helpers.
+//
+// The spinner overlay was originally shown around every filter pass via a
+// double-RAF defer.  That made the table blink for ~300-500ms even for
+// trivially fast filter ops (<20ms of DOM work), because the browser had
+// to paint the spinner, wait two frames, run the work, then fade the
+// spinner back out.  Net effect for the user: filter click → blank table.
+//
+// Filters are now applied synchronously in the same frame the click
+// happens, so the table updates instantly with no flicker.  The overlay
+// helpers stay defined as no-ops in case future callers want to opt in.
 function showTableOverlay() {
-    _overlayRefCount++;
     const el = document.getElementById('table-overlay');
     if (el) { el.classList.add('is-visible'); el.setAttribute('aria-hidden', 'false'); }
 }
 function hideTableOverlay() {
-    _overlayRefCount = Math.max(0, _overlayRefCount - 1);
-    if (_overlayRefCount > 0) return;
     const el = document.getElementById('table-overlay');
     if (el) { el.classList.remove('is-visible'); el.setAttribute('aria-hidden', 'true'); }
 }
-// Public-ish wrapper used by other modules
+// Public-ish wrapper used by other modules.  Synchronous — no overlay,
+// no RAF — because filter work is fast enough that any defer is purely
+// perceived latency.
 function withTableLoading(work) {
-    showTableOverlay();
-    requestAnimationFrame(function() {
-        requestAnimationFrame(function() {
-            try { work(); }
-            finally { hideTableOverlay(); }
-        });
-    });
+    work();
 }
 
 // Public entry point

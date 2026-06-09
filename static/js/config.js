@@ -58,6 +58,12 @@ function onInstanceChange() {
     resetViewStep();
     updateConfigChips();
     updateFetchButton();
+    // Populate the predefined-job-list dropdown right away — these come
+    // straight from contexts.json (no Jenkins round-trip), so there is
+    // no reason to gate them behind authentication.  Re-running on every
+    // instance change keeps the list in sync when the user switches
+    // between instances that carry different predefined lists.
+    populateJobListDropdown();
 }
 
 // Validate that a Jenkins URL is properly formatted (http/https with valid hostname)
@@ -185,53 +191,43 @@ async function authenticateCredentials() {
     }
 }
 
-// Check if environment credentials are available and inject a one-click auth button if they are
+// Check if environment credentials are available and inject a one-click
+// auth button if they are.  Single pair (JENKINS_TEST_USERNAME /
+// JENKINS_TEST_API_KEY) — the service account behind it has read
+// access across every Jenkins env, so this only runs once on page load.
 async function checkEnvCredentials() {
+    let data;
     try {
         const resp = await fetch('/api/env-credentials-check');
-        const data = await resp.json();
-        if (!data.available) return;
-
-        // Inject CSS if not already present
-        if (!document.getElementById('env-auth-styles')) {
-            const style = document.createElement('style');
-            style.id = 'env-auth-styles';
-            style.textContent =
-                '.env-auth-section{display:block;margin-top:12px;padding:10px 14px;background:#F0FDFA;border:1px solid #CCFBF1;border-radius:8px}' +
-                '.env-auth-label{font-size:11px;font-weight:600;color:#115E59;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;display:flex;align-items:center;gap:6px}' +
-                '.env-auth-label svg{flex-shrink:0}' +
-                '.env-auth-hint{font-size:11.5px;color:#5F7A76;margin-top:6px;line-height:1.4}' +
-                '.env-auth-hint code{font-size:10.5px;background:#E0F2FE;padding:1px 4px;border-radius:3px}' +
-                '.env-auth-divider{display:flex;align-items:center;gap:12px;margin:14px 0 2px;font-size:11px;font-weight:500;color:#94A3B8;text-transform:uppercase;letter-spacing:.06em}' +
-                '.env-auth-divider::before,.env-auth-divider::after{content:"";flex:1;height:1px;background:#E2E8F0}' +
-                '.cfg-btn-env{display:inline-flex;align-items:center;gap:6px;padding:7px 16px;font-size:12.5px;font-weight:600;border-radius:6px;cursor:pointer;transition:all .15s;border:1px solid #0F766E;background:linear-gradient(180deg,#0D9488,#0F766E);color:#fff;box-shadow:0 1px 2px rgba(15,118,110,.2),inset 0 1px 0 rgba(255,255,255,.15)}' +
-                '.cfg-btn-env:hover{background:linear-gradient(180deg,#0F766E,#115E59);border-color:#115E59;box-shadow:0 2px 6px rgba(15,118,110,.3),inset 0 1px 0 rgba(255,255,255,.1)}' +
-                '.cfg-btn-env:disabled{background:#99F6E4;border-color:#99F6E4;color:rgba(255,255,255,.7);cursor:not-allowed}';
-            document.head.appendChild(style);
-        }
-
-        // Build the env-auth section dynamically
-        const authActions = document.getElementById('auth-actions');
-        if (!authActions) return;
-
-        const section = document.createElement('div');
-        section.className = 'env-auth-section';
-        section.id = 'env-auth-section';
-        section.innerHTML =
-            '<div class="env-auth-label">' +
-                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0D9488" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h.01"/><path d="M10 12h.01"/><path d="M14 12h.01"/></svg>' +
-                'Environment Credentials Detected' +
-            '</div>' +
-            '<button class="cfg-btn cfg-btn-env" id="btn-env-authenticate" onclick="authenticateWithEnvCredentials()">' +
-                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>Authenticate using Environment Variables' +
-            '</button>' +
-            '<div class="env-auth-hint">Credentials sourced from <code>JENKINS_NP_USERNAME</code> and <code>JENKINS_NP_API_KEY1</code>. The API key is never displayed.</div>' +
-            '<div class="env-auth-divider">or authenticate manually</div>';
-
-        authActions.parentElement.insertBefore(section, authActions);
+        data = await resp.json();
     } catch (_) {
-        // Network error or env vars not available — no env-auth option
+        return; // network error → no env-auth option, manual still works
     }
+    if (!data || !data.available) return;
+
+    // Env-auth styles live in static/css/dashboard.css under the
+    // "ENV-AUTH BANNER" section.  No runtime injection needed.
+
+    const authActions = document.getElementById('auth-actions');
+    if (!authActions) return;
+
+    const userVar = data.username_var || 'JENKINS_TEST_USERNAME';
+    const keyVar = data.api_key_var || 'JENKINS_TEST_API_KEY';
+    const section = document.createElement('div');
+    section.className = 'env-auth-section';
+    section.id = 'env-auth-section';
+    section.innerHTML =
+        '<div class="env-auth-label">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0D9488" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h.01"/><path d="M10 12h.01"/><path d="M14 12h.01"/></svg>' +
+            'Environment Credentials Detected' +
+        '</div>' +
+        '<button class="cfg-btn cfg-btn-env" id="btn-env-authenticate" onclick="authenticateWithEnvCredentials()">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>Authenticate using Environment Variables' +
+        '</button>' +
+        '<div class="env-auth-hint">Credentials sourced from <code>' + userVar + '</code> and <code>' + keyVar + '</code>. The API key is never displayed.</div>' +
+        '<div class="env-auth-divider">or authenticate manually</div>';
+
+    authActions.parentElement.insertBefore(section, authActions);
 }
 
 // Authenticate using server-side environment variables and lock the auth step on success
@@ -427,8 +423,10 @@ function populateJobListDropdown() {
             const opt = document.createElement('option');
             opt.value = jl.job_list_file;
             opt.textContent = jl.name;
-            opt.dataset.environment = jl.environment || '';
-            opt.dataset.listId = jl.id;
+            // Optional fields from the legacy schema — only set when present
+            // so the dataset doesn't carry literal "undefined" strings.
+            if (jl.environment) opt.dataset.environment = jl.environment;
+            if (jl.id)          opt.dataset.listId = jl.id;
             opt.dataset.instanceId = instanceId;
             select.appendChild(opt);
         });
@@ -502,15 +500,26 @@ async function onJobListChange() {
             return;
         }
 
-        appState.customJobList = { jobs: data.jobs, name: data.name };
-        countEl.innerHTML = '<strong>' + data.count + ' jobs</strong> in ' + data.name;
+        // Use the *human* label from the dropdown option (which came from
+        // contexts.json predefined_job_lists[].name).  The route now falls
+        // back to the file basename when the JSON itself doesn't carry a
+        // name — that's correct for uploads but ugly for the predefined
+        // list, where we already have the friendly label in the option.
+        const selectedOption = select.options[select.selectedIndex];
+        const humanName = (selectedOption && selectedOption.textContent) || data.name;
+
+        appState.customJobList = { jobs: data.jobs, name: humanName };
+        countEl.innerHTML = '<strong>' + data.count + ' jobs</strong> in ' + humanName;
         countEl.style.display = 'block';
 
         // Derive environment + restore that env's stored promotion time so
         // the user gets their per-environment baseline back automatically.
-        const selectedOption = select.options[select.selectedIndex];
-        if (selectedOption.dataset.environment) {
-            appState._selectedEnvironment = selectedOption.dataset.environment;
+        // Falls back to the parent instance's env when the entry itself
+        // doesn't tag one (the post-slim default).
+        const instanceEnv = (appState.selectedInstance && appState.selectedInstance.environment) || '';
+        const env = (selectedOption && selectedOption.dataset.environment) || instanceEnv;
+        if (env) {
+            appState._selectedEnvironment = env;
             if (typeof loadPromotionTimeForCurrentEnv === 'function') {
                 loadPromotionTimeForCurrentEnv();
             }
@@ -520,7 +529,7 @@ async function onJobListChange() {
         const viewStep = document.getElementById('step-view');
         viewStep.classList.remove('step-active');
         viewStep.classList.add('step-complete');
-        document.getElementById('view-badge').textContent = data.name;
+        document.getElementById('view-badge').textContent = humanName;
         document.getElementById('view-badge').style.display = '';
 
     } catch (err) {

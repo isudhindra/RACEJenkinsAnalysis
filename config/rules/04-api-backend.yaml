@@ -1,0 +1,62 @@
+# ─── API / Backend rules ──────────────────────────────────────────────────
+# HTTP-layer signals (5xx, 401/403, 404) plus the top-priority business
+# rule: timeline events the backend was supposed to emit but didn't.
+# That last one is priority 5 — it overrides every other classification
+# because it's almost always a real product regression.
+# Priority band: 5 + 40-44.
+
+rules:
+  - name: "timeline_event_not_found"
+    priority: 5
+    domain: "API / Backend Service"
+    subcategory: "Timeline Event Missing"
+    impact: "Product Regression Likely"
+    label: "Timeline Event Missing"
+    patterns:
+      - "Unable to find timeline event"
+      - "Timeline event:.*not found within"
+    action: "Backend did not emit the expected event in time. Check the producing service (application, payment, document) and the event bus for delays, dropped messages, or a regression in the event publication flow."
+    scope: "global"
+
+  - name: "api_5xx"
+    priority: 40
+    domain: "API / Backend Service"
+    subcategory: "HTTP 5xx"
+    impact: "Product Regression Likely"
+    label: "Service Error (5xx)"
+    patterns:
+      - "HTTP/1\\.1\" 5\\d{2}"
+      - "status code:?\\s*5\\d{2}"
+      - "Internal Server Error"
+      - "502 Bad Gateway"
+      - "503 Service Unavailable"
+      - "504 Gateway Timeout"
+    action: "Backend returned 5xx. Check service deploy logs — likely real regression."
+    scope: "global"
+
+  - name: "api_4xx_auth"
+    priority: 42
+    domain: "API / Backend Service"
+    subcategory: "Auth Failure"
+    impact: "Data Issue"
+    label: "Auth Failure (401/403)"
+    patterns:
+      - "status code:?\\s*40[13]"
+      - "401 Unauthorized"
+      - "403 Forbidden"
+      - "Invalid (token|credentials|API key)"
+      - "token (expired|invalid)"
+    action: "Auth rejected. Validate test user credentials and token freshness."
+    scope: "global"
+
+  - name: "api_4xx_notfound"
+    priority: 44
+    domain: "API / Backend Service"
+    subcategory: "Resource Not Found"
+    impact: "Data Issue"
+    label: "Resource Not Found (404)"
+    patterns:
+      - "status code:?\\s*404"
+      - "404 Not Found"
+    action: "API returned 404. Check resource ID setup, URL, or whether the resource was deleted."
+    scope: "global"

@@ -1,0 +1,13 @@
+{
+  "_comment": "Copy this file, rename it, and edit the 'jobs' array to upload your own list via the 'Upload JSON' button on the Custom Job List tab. 'name' is optional and is used as the label in the dashboard; if omitted, the filename (sans .json) is used. Extra keys like this _comment are ignored.",
+
+  "name": "My Custom List",
+
+  "jobs": [
+    "team-a-api-smoke",
+    "team-a-ui-regression",
+    "team-b-integration-tests",
+    "team-b-e2e-checkout",
+    "platform-health-check"
+  ]
+}
