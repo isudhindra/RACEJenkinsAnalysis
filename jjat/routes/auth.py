@@ -58,17 +58,21 @@ def env_validate_credentials():
 
     username, api_key = env_credentials()
     if not username or not api_key:
+        print(f"[ENV-AUTH] Aborting: env vars missing for {jenkins_url}")
         return jsonify({
             "valid": False,
             "message": f"Environment credentials are not available — set {ENV_USERNAME_VAR} and {ENV_API_KEY_VAR}",
         }), 200
 
+    print(f"[ENV-AUTH] Validating {username} against {jenkins_url} (timeout={current_app.config['default_timeout']}s)...")
     try:
         client = make_client(
             {"jenkins_url": jenkins_url, "username": username, "api_token": api_key},
             timeout=current_app.config["default_timeout"],
         )
-        if client.validate_credentials():
+        ok = client.validate_credentials()
+        print(f"[ENV-AUTH] Jenkins responded — valid={ok}")
+        if ok:
             return jsonify({
                 "valid": True,
                 "message": "Environment credentials validated successfully",
@@ -76,4 +80,5 @@ def env_validate_credentials():
             }), 200
         return jsonify({"valid": False, "message": "Environment credentials rejected by Jenkins"}), 200
     except Exception as e:
+        print(f"[ENV-AUTH] Exception: {safe_err(e)}")
         return jsonify({"valid": False, "message": safe_err(e)}), 200

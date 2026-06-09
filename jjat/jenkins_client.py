@@ -68,14 +68,15 @@ class JenkinsClient:
         self._crumb: Optional[Dict[str, str]] = None
 
     def validate_credentials(self) -> bool:
-        """Return True if Jenkins actually accepts these credentials.
+        """Return True if Jenkins accepts the supplied credentials.
 
-        Hits /me/api/json — that endpoint requires authentication, so a
-        Jenkins that allows anonymous reads of /api/json can no longer
-        false-positive here. Real fetches downstream will work.
+        Uses /api/json — universally available across every Jenkins
+        deployment. If the instance permits anonymous reads, validation
+        will pass even with wrong creds, but downstream fetches still
+        surface real auth errors with clear messages.
         """
         try:
-            url = f"{self.base_url}/me/api/json?tree=id"
+            url = f"{self.base_url}/api/json?tree=_class"
             response = self.session.get(url, timeout=self.timeout)
             return response.status_code < 400
         except (requests.Timeout, requests.ConnectionError):
