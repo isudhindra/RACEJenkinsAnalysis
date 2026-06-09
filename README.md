@@ -40,7 +40,11 @@ cd ~/Downloads/<project-folder>
 python3 -m venv venv
 source venv/bin/activate
 pip install Flask requests PyYAML python-dotenv
-cp .env.example .env          # then open .env and fill in your Jenkins credentials
+cat > .env <<'EOF'
+JENKINS_TEST_USERNAME=
+JENKINS_TEST_API_KEY=
+EOF
+# open .env and fill in your Jenkins username + API token
 bash scripts/setup.sh
 ```
 
@@ -78,7 +82,11 @@ cd C:\path\to\<project-folder>
 py -3 -m venv venv
 venv\Scripts\Activate.ps1
 pip install Flask requests PyYAML python-dotenv
-Copy-Item .env.example .env   # then open .env in Notepad and fill in your Jenkins credentials
+@"
+JENKINS_TEST_USERNAME=
+JENKINS_TEST_API_KEY=
+"@ | Set-Content -Path .env -Encoding UTF8
+# open .env in Notepad and fill in your Jenkins username + API token
 .\scripts\setup.ps1
 ```
 
@@ -124,7 +132,11 @@ cd ~/<project-folder>
 python3 -m venv venv
 source venv/bin/activate
 pip install Flask requests PyYAML python-dotenv
-cp .env.example .env          # then open .env and fill in your Jenkins credentials
+cat > .env <<'EOF'
+JENKINS_TEST_USERNAME=
+JENKINS_TEST_API_KEY=
+EOF
+# open .env and fill in your Jenkins username + API token
 bash scripts/setup.sh
 ```
 
@@ -172,7 +184,7 @@ JENKINS_TEST_API_KEY=11abcd…your-jenkins-api-token
 
 The same pair works across every Jenkins environment configured in `config/contexts.json` — once you authenticate, the session covers all further API calls. If the pair is missing or rejected, the manual username + API-token fields appear as a fallback. `.env` is gitignored, so credentials never leave your machine.
 
-A ready-to-edit template lives at `.env.example`; the install steps above copy it to `.env` for you.
+The install steps above already write a `.env` skeleton for you — just fill in the two values.
 
 <br>
 
