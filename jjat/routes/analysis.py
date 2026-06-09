@@ -1,14 +1,9 @@
 """Per-job analysis endpoints.
 
-* ``POST /api/refresh-single`` — synchronous targeted refresh of one
-  job that updates ``state.job_store`` and returns the new record.
-* ``POST /api/analyze-on-demand`` — synchronous deep analysis of a
-  single job (typically used to populate a row without a full fetch).
-
-Both endpoints look very similar, but they exist as separate routes for
-caller-side intent clarity: the frontend uses ``refresh-single`` after
-auto-poll detects a status change, and ``analyze-on-demand`` from the
-per-row refresh icon.
+``/api/refresh-single`` and ``/api/analyze-on-demand`` do almost the
+same thing, but are kept separate for caller-side intent clarity:
+refresh-single fires after auto-poll detects a status change;
+analyze-on-demand fires from the per-row refresh icon.
 """
 
 from flask import Blueprint, current_app, jsonify, request
@@ -24,12 +19,7 @@ bp = Blueprint("analysis", __name__)
 
 @bp.route("/api/refresh-single", methods=["POST"])
 def refresh_single_job():
-    """Re-fetch and re-analyse a single job.
-
-    Touches only one entry in ``state.job_store`` and returns a plain
-    JSON record — ideal for in-place row updates without disrupting the
-    rest of the table.
-    """
+    """Re-fetch and re-analyse one job for in-place row updates."""
     data = resolve_credentials(request.get_json())
     job_url = data.get("job_url")
     job_name = data.get("job_name")
@@ -37,7 +27,7 @@ def refresh_single_job():
     if not job_url:
         return jsonify({"error": "job_url is required"}), 400
 
-    # Derive job_name from the existing record or the URL tail.
+    # Fall back to the existing record's name, then to the URL tail.
     if not job_name:
         existing = state.job_store.get(job_url)
         job_name = existing.job_name if existing else job_url.rstrip("/").split("/")[-1]
@@ -60,7 +50,7 @@ def refresh_single_job():
 
 @bp.route("/api/analyze-on-demand", methods=["POST"])
 def analyze_on_demand():
-    """Perform synchronous deep analysis on a single job (Stage 1 + Stage 2)."""
+    """Synchronous Stage 1 + Stage 2 analysis for a single job."""
     data = resolve_credentials(request.get_json())
     job_url = data.get("job_url")
     job_name = data.get("job_name")

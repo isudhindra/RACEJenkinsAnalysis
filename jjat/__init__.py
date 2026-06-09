@@ -1,10 +1,6 @@
 """Jenkins Job Analysis Tool — local dashboard for release validation.
 
-Package root.  Exposes the version string and re-exports the Flask app
-factory so callers can do::
-
-    from jjat import create_app
-    app = create_app()
+Re-exports :func:`create_app` so callers can ``from jjat import create_app``.
 """
 
 from jjat.application import create_app

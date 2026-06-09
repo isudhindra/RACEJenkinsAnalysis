@@ -1,8 +1,6 @@
-# ─── Browser / Session rules ──────────────────────────────────────────────
-# WebDriver session lifecycle failures — couldn't start, crashed mid-test,
-# or got disconnected.  These are almost always grid / node issues, not
-# product bugs.
-# Priority band: 50-54 (TIER 2 — broader signatures).
+# Browser session failures — the browser couldn't start, crashed, or
+# got disconnected mid-test. Almost always an infrastructure problem
+# (grid, node, container), not a product bug.
 
 rules:
   - name: "webdriver_session_not_created"

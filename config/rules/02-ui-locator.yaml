@@ -1,9 +1,6 @@
-# ─── UI / Locator rules ───────────────────────────────────────────────────
-# Selector mismatches, stale references, overlay click intercepts, and the
-# UI-specific element-wait timeout (subtly different from a generic
-# WebDriver wait — usually thrown by a Serenity step rather than
-# Selenium itself).
-# Priority band: 8-16 (TIER 1).
+# UI element problems — locator changed, element missing, blocked by an
+# overlay, or not visible. Usually a test that needs updating after a UI
+# change, not a product bug.
 
 rules:
   - name: "ui_element_wait_timeout"

@@ -1,9 +1,6 @@
-# ─── API / Backend rules ──────────────────────────────────────────────────
-# HTTP-layer signals (5xx, 401/403, 404) plus the top-priority business
-# rule: timeline events the backend was supposed to emit but didn't.
-# That last one is priority 5 — it overrides every other classification
-# because it's almost always a real product regression.
-# Priority band: 5 + 40-44.
+# Backend service failures — HTTP errors (5xx, 401/403, 404) and missing
+# timeline events. The "timeline event not found" rule is highest priority
+# because it usually means a real product regression worth blocking release.
 
 rules:
   - name: "timeline_event_not_found"

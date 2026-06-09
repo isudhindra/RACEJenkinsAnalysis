@@ -189,37 +189,23 @@ A ready-to-edit template lives at `.env.example`; the install steps above copy i
 
 <br>
 
-## Try it without Jenkins
-
-There's a built-in demo server with 80+ fake jobs covering every status and failure type. Useful for clicking around before you connect to a real Jenkins.
-
-```bash
-source venv/bin/activate            # or venv\Scripts\Activate.ps1 on Windows
-python mock/mock_server.py
-```
-
-Opens **http://127.0.0.1:5001**.
-
-<br>
-
 
 ### Project layout
 
 ```
 .
-├── app.py                       ← entry point
-├── pyproject.toml               ← dependencies + Ruff/mypy
-├── jjat/                        ← backend package
-│   ├── application.py           ← Flask factory
-│   ├── jenkins_client.py        ← HTTP client (auth, retry, CSRF)
-│   ├── pipeline.py              ← Classifier + Stage-1 / Stage-2
-│   ├── models.py                ← dataclasses + enums
-│   ├── routes/                  ← one Blueprint per API domain
-│   └── lib/                     ← shared helpers (state, creds, sse, …)
-├── static/  templates/          ← vanilla-JS frontend
-├── config/                      ← contexts.json + rules.yaml
-├── scripts/                     ← setup.sh / setup.ps1
-└── mock/                        ← mock_server.py
+├ app.py                       ← entry point
+├ pyproject.toml               ← dependencies + Ruff/mypy
+├ jjat/                        ← backend package
+│   ├ application.py           ← Flask factory
+│   ├ jenkins_client.py        ← HTTP client (auth, retry, CSRF)
+│   ├ pipeline.py              ← Classifier + Stage-1 / Stage-2
+│   ├ models.py                ← dataclasses + enums
+│   ├ routes/                  ← one Blueprint per API domain
+│   └ lib/                     ← shared helpers (state, creds, sse, …)
+├ static/  templates/          ← vanilla-JS frontend
+├ config/                      ← contexts.json + rules.yaml
+└ scripts/                     ← setup.sh / setup.ps1
 ```
 
 ### Conventions

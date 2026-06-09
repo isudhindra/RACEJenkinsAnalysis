@@ -1,14 +1,8 @@
-"""Jenkins view discovery + job-list loading.
-
-Three endpoints used by the configuration panel:
-
-* ``POST /api/discover-views`` — list every view on the Jenkins host.
-* ``POST /api/discover-view-jobs-count`` — show "(N jobs in <view>)".
-* ``POST /api/load-job-list`` — load a saved predefined job list file.
-"""
+"""Jenkins view discovery + job-list loading for the configuration panel."""
 
 import json
 import os
+from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -17,6 +11,12 @@ from jjat.lib.jenkins_factory import make_client
 from jjat.lib.jenkins_urls import resolve_view_url
 
 bp = Blueprint("views", __name__)
+
+
+# Resolve relative to the project root so tests / setup scripts are CWD-independent.
+def _job_lists_dir() -> Path:
+    """Return the absolute ``config/job_lists`` directory."""
+    return Path(__file__).resolve().parents[2] / "config" / "job_lists"
 
 
 @bp.route("/api/discover-views", methods=["POST"])
@@ -50,7 +50,7 @@ def discover_view_jobs_count():
         elif view_url and not view_url.startswith("http"):
             view_url = client.base_url.rstrip("/") + "/" + view_url.lstrip("/")
 
-        # The view must belong to the Jenkins instance the user picked.
+        # Reject views that don't belong to the picked Jenkins instance.
         if not view_url.rstrip("/").lower().startswith(jenkins_url.rstrip("/").lower()):
             return jsonify({
                 "count": 0,
@@ -74,15 +74,9 @@ def discover_view_jobs_count():
 def load_job_list():
     """Load a saved predefined job list from disk.
 
-    Expects:
-        ``{"job_list_file": "<absolute-path>"}``
-
-    Returns:
-        ``{"jobs": [...], "name": "...", "count": N}``
-
-    The job-list file itself only needs to contain ``{"jobs": [...]}``.
-    ``name`` is derived from the file's basename when the JSON doesn't
-    carry one (the canonical label lives in ``contexts.json``).
+    Body needs ``job_list_file`` (absolute path). The file itself only
+    has to provide ``{"jobs": [...]}``; ``name`` falls back to the
+    file's basename — the canonical label lives in ``contexts.json``.
     """
     data = request.get_json()
     file_path = data.get("job_list_file", "")
@@ -93,7 +87,6 @@ def load_job_list():
         with open(file_path) as f:
             job_list_data = json.load(f)
         jobs = job_list_data.get("jobs", [])
-        # File may omit "name"; fall back to its basename (sans .json).
         fallback_name = os.path.splitext(os.path.basename(file_path))[0]
         return jsonify({
             "jobs": jobs,
@@ -106,3 +99,83 @@ def load_job_list():
         return jsonify({"error": f"Invalid JSON in job list: {e}", "jobs": []}), 400
     except Exception as e:
         return jsonify({"error": safe_err(e), "jobs": []}), 500
+
+
+def _validate_job_list_file(fpath: Path):
+    """Strict-format check for a job-list JSON file.
+
+    Required: parses as JSON, top-level object, non-empty ``jobs``
+    array of non-empty strings. Returns ``(ok, name, count, reason)``;
+    when ``ok`` is False, ``reason`` is a short explanation for the log.
+    """
+    try:
+        with open(fpath) as f:
+            doc = json.load(f)
+    except Exception as e:
+        return False, None, 0, f"JSON parse error: {e}"
+    if not isinstance(doc, dict):
+        return False, None, 0, "root is not a JSON object"
+    if "jobs" not in doc:
+        return False, None, 0, 'missing required "jobs" key'
+    jobs = doc.get("jobs")
+    if not isinstance(jobs, list):
+        return False, None, 0, '"jobs" must be an array'
+    if len(jobs) == 0:
+        return False, None, 0, '"jobs" array is empty'
+    for j in jobs:
+        if not isinstance(j, str) or not j.strip():
+            return False, None, 0, '"jobs" entries must be non-empty strings'
+    display = doc.get("name")
+    if not (isinstance(display, str) and display.strip()):
+        display = os.path.splitext(os.path.basename(str(fpath)))[0]
+    return True, display, len(jobs), None
+
+
+@bp.route("/api/list-available-job-lists", methods=["GET"])
+def list_available_job_lists():
+    """Enumerate every well-formed ``.json`` file under ``config/job_lists/``.
+
+    Shows every saved list in the dropdown — not just the ones bound
+    to an instance in ``contexts.json``. ``SAMPLE-*`` files are
+    skipped (they're upload templates). Malformed files are rejected
+    with the reason logged so the dropdown stays clean.
+    """
+    out = []
+    job_dir = _job_lists_dir()
+    if not job_dir.is_dir():
+        return jsonify({"lists": []}), 200
+
+    # Mark which lists are bound to a Jenkins instance vs ad-hoc.
+    predefined_paths = set()
+    try:
+        contexts_cfg = current_app.config.get("contexts") or {}
+        for inst in contexts_cfg.get("instances", []) or []:
+            for jl in inst.get("predefined_job_lists", []) or []:
+                p = jl.get("job_list_file")
+                if p:
+                    predefined_paths.add(os.path.abspath(p))
+    except Exception:
+        pass  # best-effort flagging
+
+    for fname in sorted(os.listdir(str(job_dir))):
+        if not fname.endswith(".json"):
+            continue
+        if fname.startswith("SAMPLE-") or fname.startswith("sample-"):
+            continue
+        fpath = job_dir / fname
+        ok, display, count, reason = _validate_job_list_file(fpath)
+        if not ok:
+            try:
+                current_app.logger.warning(
+                    f"job-list rejected: {fname} — {reason}"
+                )
+            except Exception:
+                pass
+            continue
+        out.append({
+            "name": display,
+            "file": str(fpath),
+            "count": count,
+            "predefined": str(fpath) in predefined_paths,
+        })
+    return jsonify({"lists": out}), 200

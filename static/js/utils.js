@@ -1,9 +1,7 @@
-// utils.js — Shared DOM helpers, formatters, and small utility functions.
-// Every other module relies on these; keep them dependency-free.
+// utils.js — Shared DOM helpers, formatters, and small utility functions used everywhere.
 'use strict';
 
-// ── DOM shorthand helpers
-// These keep repeated getElementById / classList calls concise across the codebase.
+// DOM shorthand helpers.
 function $id(id) { return document.getElementById(id); }
 function show(id) { const el = $id(id); if (el) el.classList.remove('hidden'); }
 function hide(id) { const el = $id(id); if (el) el.classList.add('hidden'); }
@@ -12,11 +10,8 @@ function setHtml(id, html) { const el = $id(id); if (el) el.innerHTML = html; }
 function showError(id, msg) { const el = $id(id); if (el) { el.textContent = msg; el.classList.remove('hidden'); el.style.display = ''; } }
 function hideError(id) { const el = $id(id); if (el) el.classList.add('hidden'); }
 
-// Canonical visibility toggle.  Accepts either an element or an id, and
-// any other code should prefer this over direct style.display = 'none'
-// mutations — the inline-style pattern doesn't compose with .hidden
-// class toggles (removing the class can't undo an inline display:none).
-// Defensively clears any lingering inline display when revealing.
+// Canonical visibility toggle — prefer this over inline style.display so the
+// .hidden class and inline styles don't fight each other.
 function setVisible(elOrId, visible) {
     const el = (typeof elOrId === 'string') ? $id(elOrId) : elOrId;
     if (!el) return;
@@ -24,16 +19,14 @@ function setVisible(elOrId, visible) {
     if (visible && el.style.display === 'none') el.style.display = '';
 }
 
-// Return an HTML snippet for a single test-metric cell value.
-// Shows a muted "0" when the count is zero, or a coloured span otherwise.
+// HTML snippet for a single test-metric cell; muted zero, coloured otherwise.
 function renderMetricValue(value, hasMetrics, colorClass) {
     if (!hasMetrics) return '—';
     if (value === 0) return '<span class="cell-metric-muted">0</span>';
     return '<span class="' + colorClass + '">' + value + '</span>';
 }
 
-// Turn an ISO timestamp into a human-readable "25 Mar 2026, 09:49:30" string
-// with a relative-time tooltip (e.g. "3 hours ago").
+// Format ISO timestamp as "25 Mar 2026, 09:49:30" with a relative-time tooltip.
 function formatExecTime(isoString) {
     if (!isoString) return '—';
     const d = new Date(isoString);
@@ -44,14 +37,12 @@ function formatExecTime(isoString) {
     const diffHrs = Math.floor(diffMin / 60);
     const diffDays = Math.floor(diffHrs / 24);
 
-    // Build relative time string for tooltip
     let relativeStr;
     if (diffMin < 1) relativeStr = 'Just now';
     else if (diffMin < 60) relativeStr = diffMin + ' minute' + (diffMin !== 1 ? 's' : '') + ' ago';
     else if (diffHrs < 24) relativeStr = diffHrs + ' hour' + (diffHrs !== 1 ? 's' : '') + ' ago';
     else relativeStr = diffDays + ' day' + (diffDays !== 1 ? 's' : '') + ' ago';
 
-    // Build full timestamp: "25 Mar 2026, 09:49:30"
     const day = d.getDate();
     const month = d.toLocaleString('en', { month: 'short' });
     const year = d.getFullYear();
@@ -64,9 +55,9 @@ function formatExecTime(isoString) {
 }
 
 
-// ── Badge renderers ────────────────────────────────────────────────────
+//  Badge renderers 
 
-// Return the coloured HTML badge for a build status (SUCCESS, FAILURE, etc.).
+// Coloured HTML badge for a build status (SUCCESS, FAILURE, etc.).
 function renderStatusBadge(status) {
     const badges = {
         'SUCCESS': '<span class="badge badge-passed" aria-label="Passed">Passed</span>',
@@ -80,8 +71,7 @@ function renderStatusBadge(status) {
     return badges[status] || `<span class="badge badge-grey" aria-label="Unknown">${escapeHtml(status)}</span>`;
 }
 
-// Return the coloured confidence indicator (Strong , Partial , Unknown )
-// for a log-analysis classification result.
+// Coloured confidence indicator for a log-analysis classification result.
 function renderConfidenceBadge(confidence) {
     if (!confidence) return '<span class="confidence-badge confidence-unknown">Unknown</span>';
 
@@ -101,21 +91,20 @@ function renderConfidenceBadge(confidence) {
     return badge.replace('>', ` title="${tooltips[confidence] || ''}">`);
 }
 
-// ── Counter animation 
+//  Counter animation 
+
+// Animate a number element rolling from its current value to `target`.
 function animateCounterRoll(el, target) {
-    // Cancel any in-flight animation for this element to prevent
-    // compounding race conditions where intermediate values become
-    // the "current" baseline for the next animation.
+    // Cancel any in-flight animation so racing calls don't compound off a stale intermediate.
     if (el._counterRafId) {
         cancelAnimationFrame(el._counterRafId);
         el._counterRafId = null;
     }
 
-    // Read the authoritative target, not the animated intermediate
+    // Read the authoritative target (not the animated intermediate) for accurate diffing.
     const current = (typeof el._counterTarget === 'number') ? el._counterTarget : (parseInt(el.textContent.replace(/,/g, ''), 10) || 0);
     if (current === target) return;
 
-    // Stamp the target so subsequent calls know the true destination
     el._counterTarget = target;
 
     const duration = 400;
@@ -142,9 +131,67 @@ function animateCounterRoll(el, target) {
     el._counterRafId = requestAnimationFrame(step);
 }
 
-// ── String / HTML helpers ──────────────────────────────────────────────
+//  Freshness chip helpers ─
+// The header "Data as of HH:MM:SS" pill tells release managers how current
+// the dashboard data is. Call markDataFresh() after a successful poll, or
+// markDataStale() when one fails.
 
-// Escape special HTML characters so user-supplied strings are safe to inject.
+function markDataFresh() {
+    const chip = $id('header-freshness-chip');
+    const lbl = $id('header-freshness-label');
+    if (!chip || !lbl) return;
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    lbl.textContent = `Data as of ${hh}:${mm}:${ss}`;
+    chip.classList.remove('is-stale');
+    chip.hidden = false;
+    chip.title = `Most recent successful data refresh at ${hh}:${mm}:${ss}`;
+}
+
+function markDataStale(reason) {
+    const chip = $id('header-freshness-chip');
+    const lbl = $id('header-freshness-label');
+    if (!chip || !lbl) return;
+    chip.classList.add('is-stale');
+    chip.hidden = false;
+    // Keep the last-good timestamp visible so the user sees both when the data
+    // was last fresh and that the latest refresh attempt failed.
+    if (lbl.textContent && !lbl.textContent.includes('stale')) {
+        lbl.textContent = lbl.textContent + ' · stale';
+    } else if (!lbl.textContent) {
+        lbl.textContent = 'Stale — no recent data';
+    }
+    chip.title = reason
+        ? `Last refresh attempt failed: ${reason}`
+        : 'Most recent refresh attempt failed — data may be out of date.';
+}
+
+//  Row lookup helpers ─
+
+// O(1) primary-row lookup via the rowEls perf cache populated by renderJobRow.
+// Falls back to a DOM query if a row was inserted outside that path.
+function getJobRowEl(jobId) {
+    if (window.appState && appState.rowEls) {
+        const cached = appState.rowEls.get(jobId);
+        if (cached && cached.isConnected) return cached;
+    }
+    return document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}"]:not(.detail-row)`);
+}
+
+// Detail rows follow the convention data-job-id="<jobId>_detail".
+function getJobDetailRowEl(jobId) {
+    if (window.appState && appState.detailRowEls) {
+        const cached = appState.detailRowEls.get(jobId);
+        if (cached && cached.isConnected) return cached;
+    }
+    return document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}_detail"]`);
+}
+
+//  String / HTML helpers 
+
+// Escape HTML so user-supplied strings are safe to inject.
 function escapeHtml(text) {
     const map = {
         '&': '&amp;',
@@ -161,19 +208,16 @@ function escapeHtml(text) {
 const _clvUrlRe = /\b(?:https?:\/\/|ftp:\/\/|www\.)(?:&amp;|[^\s&<>"'()[\]{}]+|\([^\s&<>"']*\))+/gi;
 function clvLinkifyHtml(escapedHtml) {
     return escapedHtml.replace(_clvUrlRe, function(url) {
-        // Strip trailing punctuation that is unlikely part of the URL
         let clean = url.replace(/[.,;:!?)>\]]+$/, '');
-        // Unescape &amp; back to & for the href attribute
         let href = clean.replace(/&amp;/g, '&');
-        // For www.* matches, prepend https:// so the href is valid
         if (/^www\./i.test(href)) href = 'https://' + href;
         return '<a class="clv-link" href="' + href + '" target="_blank" rel="noopener noreferrer" title="Open in new tab">' + clean + '</a>';
     });
 }
 
-// ── Query helpers ──────────────────────────────────────────────────────
+//  Query helpers 
 
-// Collect all job records whose table rows are currently visible (not hidden by filters).
+// Job records whose table rows are currently visible (not hidden by filters).
 function getVisibleJobs() {
     const visible = [];
     document.querySelectorAll('tbody tr[data-job-id]:not(.detail-row)').forEach(row => {

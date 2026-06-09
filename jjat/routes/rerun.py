@@ -1,9 +1,4 @@
-"""Build-trigger (rerun) endpoint.
-
-Single endpoint — ``POST /api/rerun`` — that triggers a fresh build for
-each supplied job URL.  Failures are reported per-job so a single bad
-URL doesn't kill the whole batch.
-"""
+"""Build-trigger (rerun) endpoint — fires a build per URL, reports failures per-job."""
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -16,12 +11,7 @@ bp = Blueprint("rerun", __name__)
 
 @bp.route("/api/rerun", methods=["POST"])
 def rerun_builds():
-    """Trigger builds for the specified job URLs.
-
-    Returns one result row per requested URL.  ``triggered=True`` means
-    Jenkins accepted the build; ``triggered=False`` carries a short
-    ``error`` message (permission denied, job disabled, etc.).
-    """
+    """Trigger builds for the supplied URLs. Returns one row per URL with ``triggered`` + ``error``."""
     data = resolve_credentials(request.get_json())
     job_urls = data.get("job_urls", [])
     client = make_client(data, timeout=current_app.config["default_timeout"])

@@ -1,10 +1,7 @@
 """Flask application factory.
 
-Builds the Flask app, wires in the classifier, loads runtime config,
-and registers the blueprints under :mod:`jjat.routes`.  This module
-contains **no route handlers** of its own — every endpoint lives in the
-appropriate blueprint file.
-
+Builds the Flask app, loads the classifier and config, and registers
+every blueprint under :mod:`jjat.routes`. No route handlers live here.
 The repo-root ``app.py`` is the entry point and calls :func:`create_app`.
 """
 
@@ -18,27 +15,16 @@ from flask import Flask
 from jjat.pipeline import DEFAULT_WORKERS, MAX_WORKERS, MIN_WORKERS, Classifier
 from jjat.routes import register_blueprints
 
-# Load .env (project-root) into os.environ.  Per-environment credentials
-# live there as JENKINS_<ENV>_USERNAME / JENKINS_<ENV>_API_KEY pairs.
-# python-dotenv is a hard dependency (pyproject.toml); import-time
-# resolution happens before any route handler reads os.environ.
+# Populate os.environ from .env at import time, before any route handler reads credentials.
 try:
     from dotenv import load_dotenv as _load_dotenv
 
     _load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 except ImportError:
-    # python-dotenv missing — credentials must be exported by the shell.
+    # python-dotenv missing — fall back to whatever the shell exported.
     pass
 
-# ============================================================================
-# Project paths — resolved once at import time.
-#
-# jjat/application.py sits one level inside the repo, so
-# ``Path(__file__).resolve().parents[1]`` is the project root.  Everything
-# user-editable (templates, static, config) lives at the project root,
-# NOT inside the package directory, so we anchor on PROJECT_ROOT.
-# ============================================================================
-
+# Templates / static / config live at the project root, not inside the package.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 STATIC_DIR = PROJECT_ROOT / "static"
@@ -48,50 +34,26 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 def create_app() -> Flask:
     """Create and configure the Flask application.
 
-    Order of operations:
-
-    1. Build a Flask instance with absolute template / static folders.
-    2. Set default config (thread pool size, request timeout).
-    3. Load the classifier from ``config/rules.yaml``.
-    4. Load optional ``config/contexts.json``.
-    5. Apply ``JENKINS_MAX_WORKERS`` env override if set (bounded
-       :data:`MIN_WORKERS`..\\ :data:`MAX_WORKERS`).
-    6. Register every blueprint.
-
-    Returns:
-        Configured Flask application.
+    Builds the Flask instance, applies defaults, loads the classifier
+    and optional ``contexts.json``, applies any ``JENKINS_MAX_WORKERS``
+    env override, and registers all blueprints.
     """
-    # Anchor on absolute paths so Flask finds templates/static regardless
-    # of the current working directory — ``jjat/`` itself contains no
-    # templates or static assets; they live at the project root.
     app = Flask(
         __name__,
         template_folder=str(TEMPLATES_DIR),
         static_folder=str(STATIC_DIR),
     )
 
-    # ---- defaults ----------------------------------------------------------
-    # DEFAULT_WORKERS is the single source of truth — see jjat/pipeline.py.
     app.config["thread_pool_size"] = DEFAULT_WORKERS
     app.config["default_timeout"] = 30
 
-    # ---- classifier --------------------------------------------------------
-    # Loaded once at boot; route handlers re-use the same classifier via
-    # ``current_app.classifier``.  The path is a directory of per-domain
-    # YAML files (config/rules/{01-timeout, 02-ui-locator, …}); the
-    # Classifier merges them all and validates rule-name uniqueness.
-    # Single-file mode (``rules.yaml``) is still supported as a fallback
-    # — pass the file path instead — but the directory layout is the
-    # canonical form going forward.
+    # Classifier is loaded once at boot and shared via current_app.classifier.
+    # Directory mode merges per-domain YAML files; single-file mode is a fallback.
     app.classifier = Classifier(rules_path=str(CONFIG_DIR / "rules"))
 
-    # ---- contexts.json (optional) -----------------------------------------
     app.config["contexts"] = _load_contexts_json()
 
-    # ---- JENKINS_MAX_WORKERS env override --------------------------------
-    # One knob, .env-aware (python-dotenv populates os.environ at import
-    # time).  Bounded so a typo can't fan out thousands of connections
-    # and tip a real Jenkins over.  Silently ignores garbage values.
+    # Bounded override — a typo must not fan out thousands of connections to Jenkins.
     env_workers = os.environ.get("JENKINS_MAX_WORKERS", "").strip()
     if env_workers:
         try:
@@ -101,7 +63,6 @@ def create_app() -> Flask:
         except ValueError:
             pass
 
-    # ---- routes ------------------------------------------------------------
     register_blueprints(app)
     return app
 
@@ -109,20 +70,11 @@ def create_app() -> Flask:
 def _load_contexts_json() -> Dict[str, Any]:
     """Load and validate ``config/contexts.json``.
 
-    Validates structure:
-      * Top-level keys: ``instances`` (array), ``defaults`` (object).
-      * Each instance requires: ``id``, ``display_name``, ``jenkins_url``.
-      * Each instance has optional ``predefined_job_lists``.
-      * Jenkins views are discovered dynamically at runtime — any legacy
-        ``predefined_views`` field is stripped.
-      * Duplicate instance ``id`` values: first wins, the rest are skipped.
-      * Each ``predefined_job_lists[].job_list_file`` is resolved
-        relative to the ``contexts.json`` directory.
-
-    Returns:
-        Parsed contexts dict, or an empty dict if the file is missing
-        or malformed (the app then operates in "manual mode" — user
-        types in Jenkins URL + credentials).
+    Returns an empty dict when the file is missing or malformed — the
+    app then runs in manual mode (user types in Jenkins URL + creds).
+    Each instance needs ``id``, ``display_name``, ``jenkins_url``; the
+    first occurrence of any duplicate id wins. ``predefined_job_lists``
+    paths are resolved relative to the contexts.json directory.
     """
     contexts_path = CONFIG_DIR / "contexts.json"
     try:
@@ -139,7 +91,6 @@ def _load_contexts_json() -> Dict[str, Any]:
         print("[WARN] contexts.json missing 'instances' array — operating in manual mode")
         return {}
 
-    # Validate and deduplicate instances.
     instance_required = {"id", "display_name", "jenkins_url"}
     seen_ids: set = set()
     valid_instances = []
@@ -156,15 +107,11 @@ def _load_contexts_json() -> Dict[str, Any]:
             continue
         seen_ids.add(instance["id"])
 
-        # Strip legacy fields — views are discovered dynamically now.
+        # Legacy fields — views are discovered dynamically now.
         instance.pop("predefined_views", None)
         instance.pop("allow_dynamic_discovery", None)
 
-        # Validate optional predefined_job_lists.  Only ``name`` (shown in
-        # the dropdown) and ``job_list_file`` (path to the JSON) are
-        # required; older entries may still carry ``id``/``environment``/
-        # ``source_mode`` and they are silently passed through for
-        # backward compat, but the loader no longer demands them.
+        # Older job-list entries may carry extra fields; only name + file are required.
         job_list_required = {"name", "job_list_file"}
         if "predefined_job_lists" in instance and isinstance(instance["predefined_job_lists"], list):
             valid_lists = []

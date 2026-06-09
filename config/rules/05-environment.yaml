@@ -1,7 +1,6 @@
-# ─── Environment / Infrastructure rules ───────────────────────────────────
-# Network, DNS, TLS, DB, OOM, file-permission failures.  Anything below
-# the application layer.
-# Priority band: 56-66 (TIER 2).
+# Infrastructure failures — network, DNS, TLS, database, out-of-memory,
+# file permissions. Anything below the application layer; usually means
+# ops needs to look, not the product team.
 
 rules:
   - name: "connection_refused"

@@ -1,7 +1,5 @@
-# ─── Build / Configuration rules ──────────────────────────────────────────
-# Maven/Gradle compile failures, dependency resolution issues, and the
-# "Tests run: 0" no-tests-ran edge case.
-# Priority band: 70-74 (TIER 2).
+# Build failures — code that didn't compile, dependencies that couldn't
+# be resolved, or builds that finished without running any tests at all.
 
 rules:
   - name: "compilation_error"

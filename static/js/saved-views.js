@@ -1,27 +1,15 @@
-// saved-views.js — name-it / restore-it bookmarks for the dashboard.
+// Saved views — personal, per-device bookmarks for instance + view + filters
+// + promotion time + view mode. Persisted in localStorage (no backend sync).
 //
-// What gets saved per view:
-//   * Jenkins instance ID         (config-panel context)
-//   * Resolved view URL           (which Jenkins view was picked)
-//   * Status / release-status / search-text filters
-//   * Promotion time              (for release-validation)
-//   * View mode                   (summary vs detail)
-//
-// Everything lives in localStorage under the single key SAVED_VIEWS_KEY.
-// No backend — saved views are personal, per-device, never synced.
-//
-// Public functions (called from inline handlers in the template):
-//   openSavedViewsDropdown()    — toggle the dropdown
-//   saveCurrentView()           — prompt for name, persist current state
-//   applySavedView(name)        — restore everything; refetch is up to the user
-//   deleteSavedView(name)       — remove + re-render the menu
+// Public handlers (template inline events):
+//   openSavedViewsDropdown / saveCurrentView / applySavedView / deleteSavedView
 'use strict';
 
 const SAVED_VIEWS_KEY = 'jjat.saved_views';
-const SAVED_VIEWS_MAX = 25; // cap to keep localStorage tidy + the menu scannable
+const SAVED_VIEWS_MAX = 25;   // cap to keep storage tidy and menu scannable
 
 
-// ── Persistence ────────────────────────────────────────────────────────
+//  Persistence 
 
 function _readSavedViews() {
     try {
@@ -30,7 +18,7 @@ function _readSavedViews() {
         const parsed = JSON.parse(raw);
         return Array.isArray(parsed) ? parsed : [];
     } catch (e) {
-        // Corrupted JSON — start fresh rather than crash.
+        // Corrupt JSON — start fresh rather than crash.
         console.warn('[saved-views] localStorage corrupt, resetting:', e);
         return [];
     }
@@ -45,15 +33,15 @@ function _writeSavedViews(views) {
 }
 
 
-// ── State snapshot / restore ───────────────────────────────────────────
+//  Snapshot / restore 
 
-// Capture the bits of appState that uniquely identify a "view configuration".
+// Capture the bits of appState that uniquely identify a view configuration.
 function _captureCurrentSnapshot() {
     const filters = appState.filters || {};
     return {
         instance_id:     appState.selectedInstance ? appState.selectedInstance.id : null,
         view_url:        appState._resolvedViewUrl || null,
-        view_path:       (document.getElementById('view-select') || {}).value || null,
+        view_path:       (document.getElementById('cfg-view-select') || {}).value || null,
         view_mode:       appState.viewMode || 'summary',
         promotion_time:  appState.promotionTime || null,
         filter_status:   filters.status || null,
@@ -64,10 +52,9 @@ function _captureCurrentSnapshot() {
     };
 }
 
-// Restore a snapshot into the live DOM/state.  Stops short of triggering
-// a fetch — the user clicks Fetch Jobs themselves to confirm intent.
+// Restore a snapshot into the live DOM/state. Doesn't auto-fetch —
+// the user clicks Fetch Jobs to confirm intent.
 function _applySnapshot(snap) {
-    // Filters
     const fs = document.getElementById('filter-status');
     if (fs) fs.value = snap.filter_status || '';
 
@@ -77,15 +64,12 @@ function _applySnapshot(snap) {
     const search = document.getElementById('filter-search');
     if (search) search.value = snap.filter_search || '';
 
-    // Restore log-analysis multi-select
     appState.filters.logAnalysisLabels = Array.from(snap.filter_la || []);
     if (typeof updateSelectedLabelBadge === 'function') updateSelectedLabelBadge();
 
-    // Promotion time — restore both the input value AND the downstream UI
-    // (release-status dropdown visibility, regression column, dual-panel KPI)
-    // by routing through applyPromotionTime() rather than mutating
-    // appState.promotionTime directly.  Without this the dropdown stays
-    // hidden until the user manually re-applies promotion.
+    // Route through applyPromotionTime() so the regression column, release-status
+    // dropdown, and dual-panel KPI all sync. Mutating appState.promotionTime
+    // directly leaves the dropdown hidden.
     if (snap.promotion_time) {
         const promoInput = document.getElementById('promotion-datetime');
         if (promoInput) promoInput.value = snap.promotion_time.replace(/Z$/, '').slice(0, 16);
@@ -95,8 +79,7 @@ function _applySnapshot(snap) {
             appState.promotionTime = snap.promotion_time;
         }
     } else {
-        // Snapshot has no promotion — clear any active promotion so the
-        // restored view matches what the user saved.
+        // Snapshot had no promotion — clear any active one to match.
         const promoInput = document.getElementById('promotion-datetime');
         if (promoInput && promoInput.value) {
             promoInput.value = '';
@@ -104,23 +87,24 @@ function _applySnapshot(snap) {
         }
     }
 
-    // View mode (summary / detail)
     if (snap.view_mode && typeof switchViewMode === 'function') {
         switchViewMode(snap.view_mode);
     }
 
-    // Instance + view path — only restorable if the same instance still exists.
+    // Instance + view path: only restore when the instance still exists.
+    // IDs are cfg-jenkins-url / cfg-view-select (not instance-select / view-select)
+    // — using the wrong IDs silently skipped the restore for a long time.
     if (snap.instance_id) {
-        const instanceSelect = document.getElementById('instance-select');
+        const instanceSelect = document.getElementById('cfg-jenkins-url');
         if (instanceSelect && Array.from(instanceSelect.options).some(o => o.value === snap.instance_id)) {
             instanceSelect.value = snap.instance_id;
             if (typeof onInstanceChange === 'function') onInstanceChange();
         }
     }
     if (snap.view_path) {
-        // Try to set after onInstanceChange has populated the view select.
+        // Wait for onInstanceChange() to populate the view select first.
         setTimeout(() => {
-            const vs = document.getElementById('view-select');
+            const vs = document.getElementById('cfg-view-select');
             if (vs && Array.from(vs.options).some(o => o.value === snap.view_path)) {
                 vs.value = snap.view_path;
                 if (typeof onViewChange === 'function') onViewChange();
@@ -128,23 +112,36 @@ function _applySnapshot(snap) {
         }, 200);
     }
 
-    // Apply filter rerender to whatever is already in the table.
+    // Re-run filters against whatever's already in the table.
     if (typeof applyFilters === 'function') applyFilters();
 }
 
 
-// ── Menu rendering ─────────────────────────────────────────────────────
+//  Menu rendering 
 
 function _renderMenu() {
     const menu = document.getElementById('ops-saved-views-menu');
     if (!menu) return;
 
     const views = _readSavedViews();
+    // Inline name input — replaces blocking prompt() (no theming, no
+    // validation, silent clobber on duplicate names).
     let html = `
-        <button class="ops-dropdown-item" onclick="saveCurrentView(); closeOpsDropdowns()">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-            Save current view…
-        </button>
+        <div class="ops-saved-view-savebar">
+            <input type="text" id="ops-saved-view-name" class="ops-saved-view-input"
+                   placeholder="Name this view…"
+                   maxlength="60"
+                   autocomplete="off"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();_handleSaveCurrentViewSubmit();}"
+                   onclick="event.stopPropagation()" />
+            <button class="ops-dropdown-item ops-saved-view-savebtn"
+                    type="button"
+                    onclick="_handleSaveCurrentViewSubmit()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                Save
+            </button>
+        </div>
+        <div class="ops-saved-view-hint" id="ops-saved-view-hint" hidden></div>
     `;
 
     if (views.length === 0) {
@@ -180,7 +177,7 @@ function _describeSnapshot(s) {
 }
 
 
-// ── Public handlers (called from template inline events) ───────────────
+//  Public handlers (template inline events) 
 
 function openSavedViewsDropdown() {
     _renderMenu();
@@ -189,8 +186,30 @@ function openSavedViewsDropdown() {
     }
 }
 
-function saveCurrentView() {
-    const name = (prompt('Name this view:') || '').trim();
+// Bound to the inline save bar's Enter key / Save button.
+function _handleSaveCurrentViewSubmit() {
+    const input = document.getElementById('ops-saved-view-name');
+    const hint = document.getElementById('ops-saved-view-hint');
+    if (!input) return;
+    const name = (input.value || '').trim();
+    if (!name) {
+        if (hint) {
+            hint.textContent = 'Enter a name first.';
+            hint.hidden = false;
+        }
+        input.focus();
+        return;
+    }
+    saveCurrentView(name);
+}
+
+function saveCurrentView(nameArg) {
+    // Defensive: fall back to prompt() if a caller invokes without a name.
+    // The toolbar UI now always supplies one via _handleSaveCurrentViewSubmit.
+    const name = (nameArg != null
+        ? String(nameArg)
+        : (typeof prompt === 'function' ? (prompt('Name this view:') || '') : '')
+    ).trim();
     if (!name) return;
 
     const snap = _captureCurrentSnapshot();
@@ -204,15 +223,16 @@ function saveCurrentView() {
     }
 
     let views = _readSavedViews();
-    // Overwrite if name already exists.
+    const existed = views.some(v => v.name === name);
+    // One slot per name — overwrite, and surface the overwrite via toast.
     views = views.filter(v => v.name !== name);
     views.unshift({ name, snapshot: snap });
     if (views.length > SAVED_VIEWS_MAX) views = views.slice(0, SAVED_VIEWS_MAX);
     _writeSavedViews(views);
-
     if (typeof showToast === 'function') {
-        showToast(`Saved view "${name}"`, 'success');
+        showToast(existed ? `Updated saved view "${name}"` : `Saved view "${name}"`, 'success');
     }
+    if (typeof closeOpsDropdowns === 'function') closeOpsDropdowns();
 }
 
 function applySavedView(name) {

@@ -1,8 +1,5 @@
-# ─── Assertion rules ──────────────────────────────────────────────────────
-# JUnit / Hamcrest / AssertJ assertion failures — actual value didn't
-# match expected.  These could be real product regressions OR stale test
-# expectations; the classification just identifies the framework.
-# Priority band: 24-28 (TIER 1).
+# Assertion failures — the test got a value it didn't expect. Could be a
+# real product regression or a stale test expectation; needs human eyes.
 
 rules:
   - name: "junit_assertion"

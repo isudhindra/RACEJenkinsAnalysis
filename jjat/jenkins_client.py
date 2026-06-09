@@ -1,10 +1,4 @@
-"""
-Jenkins API Integration Layer
-
-Encapsulates all Jenkins API interactions including authentication, job discovery,
-build metadata fetching, test metrics retrieval, console log access, and build
-triggering with exponential backoff retry logic.
-"""
+"""Jenkins API integration — auth, discovery, fetch, trigger, retries."""
 
 import time
 from datetime import datetime
@@ -16,12 +10,9 @@ from requests.auth import HTTPBasicAuth
 
 from jjat.models import BuildInfo, BuildStatus, TestMetrics
 
-# ============================================================================
-# EXCEPTIONS
-# ============================================================================
 
 class JenkinsClientError(Exception):
-    """Exception raised for unrecoverable Jenkins API errors."""
+    """Raised for unrecoverable Jenkins API errors."""
 
     def __init__(
         self,
@@ -29,38 +20,18 @@ class JenkinsClientError(Exception):
         status_code: Optional[int] = None,
         job_url: Optional[str] = None,
     ) -> None:
-        """
-        Initialize JenkinsClientError.
-
-        Args:
-            message: Error description.
-            status_code: HTTP status code if applicable.
-            job_url: Job URL if applicable.
-        """
         self.message = message
         self.status_code = status_code
         self.job_url = job_url
         super().__init__(self.message)
 
 
-# ============================================================================
-# JENKINS CLIENT
-# ============================================================================
-
 class JenkinsClient:
-    """
-    Jenkins API client with connection pooling, authentication, and retry logic.
+    """Jenkins API client with connection pooling, auth, and retry logic."""
 
-    Manages all interactions with Jenkins API endpoints, including job discovery,
-    build metadata fetching, test metrics retrieval, console access, and build
-    triggering.
-    """
-
-    # Retry configuration
     MAX_RETRIES = 3
-    RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
+    RETRY_DELAYS = [1, 2, 4]  # Exponential backoff (seconds).
 
-    # Jenkins result → BuildStatus mapping (used by _parse_build_status)
     _STATUS_MAP = {
         "SUCCESS": BuildStatus.SUCCESS,
         "FAILURE": BuildStatus.FAILURE,
@@ -77,47 +48,27 @@ class JenkinsClient:
         timeout: int = 30,
         pool_size: int = 32,
     ) -> None:
-        """
-        Initialize JenkinsClient.
-
-        Args:
-            base_url: Base URL of Jenkins instance (e.g., https://jenkins.example.com).
-            username: Jenkins username for authentication.
-            api_token: Jenkins API token for authentication.
-            timeout: Request timeout in seconds (default: 30).
-        """
-        # Strip trailing slash from base_url
+        """Initialize JenkinsClient with a pooled, authenticated session."""
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-        # Create session with HTTP Basic Auth and connection pooling
         self.session = requests.Session()
         self.session.auth = HTTPBasicAuth(username, api_token)
         self.session.headers.update({"Accept": "application/json"})
         adapter = HTTPAdapter(
             pool_connections=pool_size,
             pool_maxsize=pool_size,
-            max_retries=0,  # retries are handled at the call-site level
+            max_retries=0,  # Retries are handled in _request_with_retry.
         )
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
-        # CSRF crumb cache. Lazy-initialised on the first POST.
-        #   None             → not yet fetched
-        #   {"header": ..., "value": ...} → crumb is in use
-        #   {}               → server has CSRF disabled (issuer returned 404)
+        # CSRF crumb cache, lazily populated on first POST.
+        # None = not yet fetched; {} = server has CSRF disabled.
         self._crumb: Optional[Dict[str, str]] = None
 
     def validate_credentials(self) -> bool:
-        """
-        Validate Jenkins credentials.
-
-        Attempts to fetch Jenkins API info without raising exceptions.
-        Used by app.py for credential validation on connection.
-
-        Returns:
-            True if credentials are valid (2xx response); False otherwise.
-        """
+        """Return True if Jenkins accepts the supplied credentials."""
         try:
             url = f"{self.base_url}/api/json?tree=_class"
             response = self.session.get(url, timeout=self.timeout)
@@ -128,21 +79,7 @@ class JenkinsClient:
             return False
 
     def discover_jobs_from_view(self, view_url: str) -> List[Dict[str, str]]:
-        """
-        Discover jobs from a Jenkins view.
-
-        Fetches job list from a view URL using the Jenkins API.
-
-        Args:
-            view_url: Full URL to a Jenkins view (e.g., https://jenkins.example.com/view/MyView).
-
-        Returns:
-            List of dicts with keys "name" and "url". Empty list if view has no jobs.
-
-        Raises:
-            JenkinsClientError: On 404 (view not found), 401 (auth failed), timeout,
-                or connection error.
-        """
+        """List the jobs in a Jenkins view as ``{"name", "url"}`` dicts."""
         url = f"{view_url}/api/json?tree=jobs[name,url]"
 
         try:
@@ -167,23 +104,10 @@ class JenkinsClient:
         job_url: str,
         build_identifier: str = "lastBuild",
     ) -> BuildInfo:
-        """
-        Fetch build information.
+        """Fetch build metadata (number, status, timestamp, duration).
 
-        Retrieves metadata about a specific build: number, result, timestamp, and
-        duration.
-
-        Args:
-            job_url: Full URL to a Jenkins job (e.g., https://jenkins.example.com/job/MyJob).
-            build_identifier: Build identifier - "lastBuild", "lastCompletedBuild", or
-                a build number string (default: "lastBuild").
-
-        Returns:
-            BuildInfo object with build_number, status, timestamp, and duration_ms.
-
-        Raises:
-            JenkinsClientError: On 404 (build not found), 401 (auth failed), timeout,
-                or connection error.
+        ``build_identifier`` may be ``"lastBuild"``, ``"lastCompletedBuild"``,
+        or a numeric build-number string.
         """
         url = (
             f"{job_url}/{build_identifier}/api/json?"
@@ -194,18 +118,15 @@ class JenkinsClient:
             response = self._request_with_retry("GET", url)
             data = response.json()
 
-            # Map Jenkins build result to BuildStatus.
+            # Missing result means Jenkins is still running the build.
             result = data.get("result")
             if result is None:
                 status = BuildStatus.IN_PROGRESS
             else:
                 status = self._parse_build_status(result)
 
-            # Parse timestamp (milliseconds since epoch)
             timestamp_ms = data.get("timestamp", 0)
             timestamp = datetime.fromtimestamp(timestamp_ms / 1000.0)
-
-            # Duration in milliseconds
             duration_ms = data.get("duration", 0)
 
             return BuildInfo(
@@ -228,22 +149,7 @@ class JenkinsClient:
         job_url: str,
         build_number: int,
     ) -> Optional[TestMetrics]:
-        """
-        Fetch test metrics from a build.
-
-        Attempts to retrieve test report metrics (test counts, durations). Returns
-        None if test report is not available (404).
-
-        Args:
-            job_url: Full URL to a Jenkins job.
-            build_number: Build number (integer).
-
-        Returns:
-            TestMetrics object if test report exists; None on 404 (no test report).
-
-        Raises:
-            JenkinsClientError: On 401 (auth failed), timeout, or connection error.
-        """
+        """Fetch test-report metrics for a build, or ``None`` when no report exists."""
         url = (
             f"{job_url}/{build_number}/testReport/api/json?"
             "tree=totalCount,passCount,failCount,skipCount,duration"
@@ -252,17 +158,16 @@ class JenkinsClient:
         try:
             response = self._request_with_retry("GET", url)
 
-            # 404 means test report doesn't exist
             if response.status_code == 404:
                 return None
 
             data = response.json()
 
-
             total = data.get("totalCount")
             passed = data.get("passCount") or 0
             failed = data.get("failCount") or 0
             skipped = data.get("skipCount") or 0
+            # Some Jenkins versions omit totalCount; reconstruct from the parts.
             if total is None:
                 parts_sum = passed + failed + skipped
                 total = parts_sum if parts_sum > 0 else None
@@ -276,7 +181,6 @@ class JenkinsClient:
             )
 
         except JenkinsClientError as e:
-            # Re-raise unless it's a 404
             if e.status_code == 404:
                 return None
             raise
@@ -286,10 +190,8 @@ class JenkinsClient:
                 job_url=job_url,
             )
 
-    # Hard cap on console-body bytes per fetch.  Without it, a single
-    # pathological Jenkins build (multi-GB log) can tie up a worker
-    # thread for minutes streaming bytes that no downstream code can
-    # usefully classify — the classifier only ever looks at the tail.
+    # Hard cap protects workers from multi-GB pathological logs; the
+    # classifier only ever looks at the tail anyway.
     _CONSOLE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 
     def fetch_console_full(
@@ -297,25 +199,7 @@ class JenkinsClient:
         job_url: str,
         build_number: int,
     ) -> str:
-        """
-        Fetch the complete console output for a build (capped at 10MB).
-
-        Streams the response body and stops reading once
-        :attr:`_CONSOLE_MAX_BYTES` is reached — protects worker threads
-        from runaway Jenkins logs without losing the data the classifier
-        actually uses (which lives in the last several hundred lines).
-
-        Args:
-            job_url: Full URL to a Jenkins job.
-            build_number: Build number (integer).
-
-        Returns:
-            Plain text string containing up to 10MB of console output.
-            Empty string if console has no content.
-
-        Raises:
-            JenkinsClientError: On 404, 401, timeout, or connection error.
-        """
+        """Fetch the full console output, capped at 10MB to protect workers."""
         url = f"{job_url}/{build_number}/consoleText"
 
         try:
@@ -331,7 +215,7 @@ class JenkinsClient:
                     break
             response.close()
             body = b"".join(chunks)
-            # Decode best-effort — Jenkins consoles can carry mixed encodings.
+            # Jenkins consoles carry mixed encodings — best-effort decode.
             return body.decode("utf-8", errors="replace")
         except JenkinsClientError:
             raise
@@ -341,8 +225,7 @@ class JenkinsClient:
                 job_url=job_url,
             )
 
-    # Approximate bytes-per-line for Cucumber/Serenity console output.
-    # Used to size the tail window when fetching progressiveText.
+    # Rough bytes-per-line for Cucumber/Serenity logs — used to size the tail window.
     _AVG_BYTES_PER_LINE = 160
 
     def _fetch_console_progressive(
@@ -351,27 +234,11 @@ class JenkinsClient:
         build_number: int,
         start: int,
     ) -> tuple:
-        """
-        Low-level progressiveText fetch.
+        """Hit ``logText/progressiveText`` and return ``(text, x_text_size)``.
 
-        Returns the tuple ``(text, x_text_size)`` where ``x_text_size`` is the
-        total console size in bytes (from the ``X-Text-Size`` response header)
-        or ``None`` if the header is absent.
-
-        This is the single seam used by :meth:`fetch_console_tail` and any
-        future incremental-tail callers.  Do not duplicate the URL or header
-        parsing logic elsewhere.
-
-        Args:
-            job_url: Full URL to a Jenkins job.
-            build_number: Build number (integer).
-            start: Byte offset to start fetching from.
-
-        Returns:
-            Tuple of (response_text, x_text_size_or_None).
-
-        Raises:
-            JenkinsClientError: On 404, 401, timeout, or connection error.
+        ``x_text_size`` (from the ``X-Text-Size`` response header) is the
+        full console byte length, or ``None`` if absent. Single seam used
+        by :meth:`fetch_console_tail`.
         """
         url = f"{job_url}/{build_number}/logText/progressiveText?start={start}"
         response = self._request_with_retry("GET", url)
@@ -388,35 +255,11 @@ class JenkinsClient:
         build_number: int,
         lines: int = 500,
     ) -> str:
-        """
-        Fetch approximately the last N lines of console output.
+        """Return roughly the last ``lines`` lines of the console log.
 
-        Uses Jenkins' ``logText/progressiveText`` endpoint with a byte-offset
-        ``start`` parameter so only the trailing portion of the log is
-        transferred — much cheaper than downloading the full console for
-        large jobs.
-
-        Strategy:
-          1. Issue a ``start=0`` request with a minimal body just to read the
-             ``X-Text-Size`` response header (Jenkins always returns the full
-             body for this endpoint, but on small logs that *is* the whole
-             log and we are done in one round-trip).
-          2. If the log is larger than the estimated tail window, issue a
-             second request with ``start=<size - window>`` and discard the
-             first (possibly partial) line.
-
-        Args:
-            job_url: Full URL to a Jenkins job.
-            build_number: Build number (integer).
-            lines: Number of lines to return from the end (default: 500).
-
-        Returns:
-            Plain text containing roughly the last ``lines`` lines.  May be
-            slightly shorter than ``lines`` for very short logs, or exactly
-            ``lines`` for long ones.
-
-        Raises:
-            JenkinsClientError: On 404, 401, timeout, or connection error.
+        For large jobs this is much cheaper than ``fetch_console_full`` —
+        it reads X-Text-Size on the first call, then issues a second
+        offset request only if the log exceeds the tail window.
         """
         try:
             first_text, total_size = self._fetch_console_progressive(
@@ -430,31 +273,28 @@ class JenkinsClient:
                 job_url=job_url,
             )
 
-        # Size the tail window — bias high so we don't miss lines.
+        # Bias the window large so we don't miss lines we wanted.
         tail_bytes = lines * self._AVG_BYTES_PER_LINE
 
-        # If X-Text-Size is missing or the whole log already fits in the tail
-        # window, we're done — return the last `lines` from what we have.
+        # Whole log already fits in the window — no second round-trip needed.
         if total_size is None or total_size <= tail_bytes:
             if not first_text:
                 return ""
             return "\n".join(first_text.split("\n")[-lines:])
 
-        # Log is larger than the tail window — fetch from the offset.
         offset = max(0, total_size - tail_bytes)
         try:
             tail_text, _ = self._fetch_console_progressive(
                 job_url, build_number, start=offset,
             )
         except JenkinsClientError:
-            # Fall back to whatever we got on the first call.
+            # Fall back to the first-call body rather than failing entirely.
             tail_text = first_text
 
         if not tail_text:
             return ""
 
-        # Drop the first (possibly partial) line introduced by mid-stream
-        # offset, then return the trailing `lines` lines.
+        # First line after a mid-stream offset is partial — drop it.
         parts = tail_text.split("\n")
         if len(parts) > 1:
             parts = parts[1:]
@@ -466,34 +306,11 @@ class JenkinsClient:
         count: int = 5,
         field: str = "builds",
     ) -> list:
-        """
-        Fetch a window of builds for a job in a single API call.
+        """Fetch up to ``count`` builds for a job in one round-trip.
 
-        Uses the Jenkins JSON API with a range selector to retrieve up to
-        *count* builds efficiently (one HTTP round-trip).
-
-        The ``field`` argument selects which Jenkins collection to query:
-
-        * ``"builds"`` (default) — the recent-builds cache Jenkins keeps in
-          memory.  Fast but bounded; typically the last ~30 builds.  Use this
-          for the "latest pass + 2 recent" view.
-        * ``"allBuilds"`` — the complete build history.  Slightly more
-          expensive on the Jenkins side but lets us walk back through many
-          builds to find an older ``last_passed`` reliably.
-
-        Args:
-            job_url: Full URL to a Jenkins job.
-            count: Maximum number of builds to retrieve (default: 5).
-            field: Jenkins collection name — ``"builds"`` or ``"allBuilds"``.
-
-        Returns:
-            List of BuildInfo objects, ordered newest-first.  May be shorter
-            than *count* if the job has fewer builds.  Returns an empty list
-            when the API response contains no builds array.
-
-        Raises:
-            JenkinsClientError: On 401 (auth failed), timeout, or connection
-                error.  404 errors return an empty list (job has no builds).
+        ``field="builds"`` queries Jenkins' in-memory cache (cheap, ~30
+        builds). ``field="allBuilds"`` walks the full history so older
+        ``last_passed`` builds can be found.
         """
         url = (
             f"{job_url}/api/json?"
@@ -545,23 +362,10 @@ class JenkinsClient:
         job_url: str,
         depth: int = 50,
     ) -> Optional[BuildInfo]:
-        """
-        Find the most recent SUCCESS build by walking back through history.
+        """Find the newest SUCCESS within ``depth`` builds via a single tree query.
 
-        Uses a single ``allBuilds{0,depth}`` tree query and scans for the
-        newest SUCCESS — much cheaper than calling :meth:`find_last_passed_build`
-        which issues one HTTP request per build.
-
-        Args:
-            job_url: Full URL to a Jenkins job.
-            depth: Maximum number of historical builds to scan (default: 50).
-
-        Returns:
-            BuildInfo of the newest SUCCESS in the window, or ``None`` if no
-            SUCCESS exists within ``depth`` builds.
-
-        Raises:
-            JenkinsClientError: On 401, timeout, or connection error.
+        Much cheaper than :meth:`find_last_passed_build`, which costs one
+        HTTP call per build.
         """
         builds = self.fetch_recent_builds(job_url, count=depth, field="allBuilds")
         for b in builds:
@@ -575,27 +379,11 @@ class JenkinsClient:
         starting_from: int,
         max_depth: int = 20,
     ) -> Optional[BuildInfo]:
-        """
-        Find the last passing build.
+        """Walk backward one-build-at-a-time looking for SUCCESS.
 
-        Iterates backward from starting_from down to starting_from - max_depth,
-        checking each build for SUCCESS status. Silently skips 404 errors (builds
-        that don't exist). Returns the first passing build found, or None if no
-        passing build exists within max_depth.
-
-        Args:
-            job_url: Full URL to a Jenkins job.
-            starting_from: Build number to start searching from (typically the
-                current build number).
-            max_depth: Maximum number of builds to check backward (default: 20).
-
-        Returns:
-            BuildInfo of first passing build found; None if no passing build
-            within max_depth.
-
-        Raises:
-            JenkinsClientError: On 401, timeout, or connection error (404 errors
-                are silently skipped).
+        Slower than :meth:`fetch_last_passed` (one HTTP call per build);
+        kept for callers that need a precise stopping point. 404s are
+        skipped silently — those build numbers simply don't exist.
         """
         for build_number in range(starting_from, starting_from - max_depth, -1):
             try:
@@ -603,49 +391,29 @@ class JenkinsClient:
                 if build_info.status == BuildStatus.SUCCESS:
                     return build_info
             except JenkinsClientError as e:
-                # Silently skip 404 errors (build doesn't exist)
                 if e.status_code == 404:
                     continue
-                # Propagate all other errors
                 raise
 
         return None
 
     def trigger_build(self, job_url: str) -> bool:
-        """
-        Trigger a build.
-
-        Attempts to queue a new build for a Jenkins job.
-
-        Args:
-            job_url: Full URL to a Jenkins job.
-
-        Returns:
-            True if build was successfully queued (201/202 response).
-            False if permission denied (403) or job disabled (409).
-
-        Raises:
-            JenkinsClientError: On 401 (auth failed), 404 (job not found),
-                timeout, or connection error.
-        """
+        """Queue a new build. Returns ``False`` for 403 (denied) / 409 (disabled)."""
         url = f"{job_url}/build"
 
         try:
             response = self._request_with_retry("POST", url)
 
-            # Success: 201 or 202 means queued
             if response.status_code in (201, 202):
                 return True
 
-            # 403: Permission denied, 409: Job disabled
+            # 403 = permission denied, 409 = job disabled.
             if response.status_code in (403, 409):
                 return False
 
-            # Other 2xx responses are also success
             if 200 <= response.status_code < 300:
                 return True
 
-            # Unexpected status
             raise JenkinsClientError(
                 f"Unexpected response status: {response.status_code}",
                 status_code=response.status_code,
@@ -661,33 +429,25 @@ class JenkinsClient:
             )
 
     def _get_crumb(self) -> Dict[str, str]:
-        """
-        Lazily fetch the Jenkins CSRF crumb and cache it on the session.
+        """Lazily fetch + cache the Jenkins CSRF crumb header.
 
-        Modern Jenkins (≥2.176) rejects POST requests without a valid crumb.
-        Older instances may have CSRF disabled, in which case the issuer
-        endpoint returns 404 — we cache an empty mapping and never re-fetch.
-
-        Returns:
-            A header mapping suitable for merging into a POST request.
-            ``{}`` when CSRF is disabled on the server.
+        Modern Jenkins (>=2.176) rejects POSTs without a crumb. Returns
+        ``{}`` when the server has CSRF disabled or we can't reach the
+        issuer, so POSTs are never blocked by crumb-fetch failures.
         """
         if self._crumb is not None:
             return self._crumb
 
         try:
             url = f"{self.base_url}/crumbIssuer/api/json"
-            # Direct session.get — avoid recursing through _request_with_retry
-            # (which would call back into _get_crumb for POSTs).
+            # Direct call to avoid recursing through _request_with_retry.
             response = self.session.get(url, timeout=self.timeout)
             if response.status_code == 404:
                 # CSRF disabled on this server.
                 self._crumb = {}
                 return self._crumb
             if response.status_code >= 400:
-                # Couldn't fetch crumb for some other reason — proceed without
-                # one. If the POST genuinely needs a crumb it will fail with
-                # 403 and the caller will see that.
+                # Proceed without a crumb — if the POST really needs one, it'll 403.
                 self._crumb = {}
                 return self._crumb
 
@@ -701,7 +461,7 @@ class JenkinsClient:
             return self._crumb
 
         except Exception:
-            # Network error fetching the crumb — don't block the POST.
+            # Don't block the POST on a network blip fetching the crumb.
             self._crumb = {}
             return self._crumb
 
@@ -711,37 +471,14 @@ class JenkinsClient:
         url: str,
         **kwargs: Any,
     ) -> requests.Response:
-        """
-        Execute an HTTP request with exponential backoff retry logic.
+        """HTTP request with exponential backoff on timeout / 5xx.
 
-        For mutating requests (POST/PUT/DELETE) the Jenkins CSRF crumb is
-        attached automatically via :meth:`_get_crumb`.
-
-        Retries on:
-        - requests.Timeout
-        - requests.ConnectionError
-        - HTTP 5xx (server errors)
-
-        Does not retry on:
-        - HTTP 4xx (client errors) — returned immediately
-
-        Args:
-            method: HTTP method (GET, POST, etc.).
-            url: Full URL to request.
-            **kwargs: Additional arguments to pass to session.request().
-
-        Returns:
-            requests.Response object.
-
-        Raises:
-            JenkinsClientError: After MAX_RETRIES failed attempts or on 4xx
-                with non-retryable error.
+        Mutating methods get a CSRF crumb attached automatically. 4xx
+        responses return immediately (never retried); 404 is returned as
+        a response object so callers can handle it.
         """
         last_exception = None
 
-        # Inject CSRF crumb for mutating requests. One-shot lazy fetch; if
-        # the server doesn't use crumbs the call is a no-op after the first
-        # attempt.
         if method.upper() in ("POST", "PUT", "DELETE", "PATCH"):
             crumb_headers = self._get_crumb()
             if crumb_headers:
@@ -758,10 +495,9 @@ class JenkinsClient:
                     **kwargs,
                 )
 
-                # Don't retry 4xx errors (immediate return or raise)
                 if 400 <= response.status_code < 500:
                     if response.status_code == 404:
-                        # 404 is special: return the response so caller can handle
+                        # Return so the caller can treat "not found" as data, not error.
                         return response
                     if response.status_code == 401:
                         raise JenkinsClientError(
@@ -778,7 +514,6 @@ class JenkinsClient:
                         status_code=response.status_code,
                     )
 
-                # 5xx errors: retry
                 if response.status_code >= 500:
                     last_exception = JenkinsClientError(
                         f"HTTP {response.status_code}: {response.reason}",
@@ -789,7 +524,6 @@ class JenkinsClient:
                         continue
                     raise last_exception
 
-                # Success (2xx, 3xx)
                 return response
 
             except requests.Timeout:
@@ -814,26 +548,16 @@ class JenkinsClient:
                 raise
 
             except Exception as e:
-                # Unexpected error: don't retry
                 raise JenkinsClientError(
                     f"Unexpected error: {str(e)}",
                 )
 
-        # Should not reach here, but just in case
         if last_exception:
             raise last_exception
         raise JenkinsClientError("Request failed after maximum retries")
 
     def _parse_build_status(self, result: str) -> BuildStatus:
-        """
-        Parse Jenkins build result string to BuildStatus enum.
-
-        Args:
-            result: Build result string from Jenkins API.
-
-        Returns:
-            BuildStatus enum value.
-        """
+        """Map a Jenkins result string to a :class:`BuildStatus`."""
         result = (result or "").strip().upper()
 
         return self._STATUS_MAP.get(result, BuildStatus.UNKNOWN)

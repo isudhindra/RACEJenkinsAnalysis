@@ -1,10 +1,9 @@
-"""Refresh-related endpoints.
+"""Refresh endpoints.
 
-* ``POST /api/refresh/stream`` — SSE stream that selectively re-analyses
-  a subset of jobs (all / failed / unstable / selected).
-* ``POST /api/poll-status`` — cheap polling endpoint used by the
-  auto-refresh feature.  Returns just (build_number, status, timestamp)
-  per job so the frontend can detect which ones need a full refresh.
+``/api/refresh/stream`` selectively re-analyses a subset of jobs.
+``/api/poll-status`` is a cheap auto-refresh probe that returns only
+``(build_number, status, timestamp)`` so the frontend can decide which
+jobs deserve a full refresh.
 """
 
 import os
@@ -26,12 +25,9 @@ from jjat.routes._streaming import stream_selective_refresh
 bp = Blueprint("refresh", __name__)
 
 
-# Bounded concurrency for /api/poll-status — a 50-job sweep shouldn't open
-# 50 sockets at once.  Separate from the main JENKINS_MAX_WORKERS knob
-# because polling is cheap (lastBuild-only, no console fetch) and
-# benefits from a tighter cap to avoid drowning out user-triggered
-# fetches.  Override via JENKINS_POLL_WORKERS in .env / shell; clamped
-# to a sane 1..32.
+# Poll concurrency is capped separately from the main worker pool —
+# polling is cheap (lastBuild only) and we don't want it to drown out
+# user-triggered fetches. Override via JENKINS_POLL_WORKERS, clamped 1..32.
 def _resolve_poll_workers() -> int:
     raw = os.environ.get("JENKINS_POLL_WORKERS", "").strip()
     if raw:
@@ -49,20 +45,14 @@ _POLL_MAX_WORKERS = _resolve_poll_workers()
 
 @bp.route("/api/refresh/stream", methods=["POST"])
 def refresh_stream():
-    """Stream a selective refresh via SSE.
-
-    Does NOT clear ``state.job_store`` — entries are updated in place.
-    Supported scopes: ``all``, ``failed``, ``unstable``, ``selected``,
-    ``single``.
-    """
+    """SSE selective refresh — updates the store in place. Scopes: all / failed / unstable / selected / single."""
     data = resolve_credentials(request.get_json())
     operation_id = str(uuid.uuid4())
     state.active_operation_id = operation_id
 
     scope = data.get("scope", "all")
     job_ids = data.get("job_ids", [])
-    # No per-request override — see fetch.py for the rationale.  Single
-    # knob is JENKINS_MAX_WORKERS via .env / shell.
+    # No per-request override — JENKINS_MAX_WORKERS is the single knob.
     max_workers = current_app.config["thread_pool_size"]
 
     target_jobs = _resolve_target_job_urls(scope, job_ids)
@@ -78,7 +68,7 @@ def refresh_stream():
 
         return Response(empty_gen(), mimetype="text/event-stream")
 
-    # Pool sized to match worker count — same rationale as in /api/fetch/stream.
+    # Pool size matches worker count — same rationale as /api/fetch/stream.
     client = make_client(
         data,
         timeout=current_app.config["default_timeout"],
@@ -91,7 +81,7 @@ def refresh_stream():
         promotion_time=parse_promotion_time(data),
     )
 
-    # Translate URLs back into {"name": ..., "url": ...} dicts.
+    # Rebuild {name, url} dicts from URLs, reusing names already in the store.
     jobs_for_refresh = []
     for job_url in target_jobs:
         existing = state.job_store.get(job_url)
@@ -106,25 +96,18 @@ def refresh_stream():
 
 @bp.route("/api/poll-status", methods=["POST"])
 def poll_status():
-    """Cheap background-poll endpoint for the auto-refresh feature.
+    """Cheap status-only probe for auto-refresh.
 
-    Returns ONLY ``(build_number, status, timestamp)`` per requested job
-    — no console, no metrics, no classification.  The frontend diffs the
-    response against its last known state and fires a richer
-    ``/api/refresh-single`` only for jobs whose status or build_number
-    actually changed.
-
-    Errors per-job are returned with ``status="ERROR"`` and a short
-    message, so a single bad job never blows up the whole sweep.
+    Returns ``(build_number, status, timestamp)`` per job — no console,
+    metrics, or classification. Per-job errors carry ``status="ERROR"``
+    so one bad job doesn't blow up the whole sweep.
     """
     data = resolve_credentials(request.get_json() or {})
     job_urls = data.get("job_urls", []) or []
     if not isinstance(job_urls, list) or not job_urls:
         return jsonify({"statuses": []}), 200
 
-    # Pool size matches the worker count exactly — without this, urllib3's
-    # default 10-socket pool serialises any thread beyond that and the
-    # request-spreading effort here is wasted on the wire.
+    # Match pool size to worker count — urllib3's default 10 would otherwise serialise threads.
     client = make_client(
         data,
         timeout=current_app.config["default_timeout"],
@@ -141,7 +124,6 @@ def poll_status():
                 "timestamp": bi.timestamp.isoformat(),
             }
         except Exception as e:
-            # Don't kill the whole sweep on one bad job.
             return {
                 "job_url": url,
                 "build_number": None,
@@ -160,13 +142,9 @@ def poll_status():
 
 
 def _resolve_target_job_urls(scope: str, job_ids: List[str]) -> List[str]:
-    """Return the list of job URLs to refresh for the given scope.
+    """Return the job URLs to refresh for the given scope.
 
-    Args:
-        scope: ``"all"``, ``"failed"``, ``"unstable"``, ``"selected"``, or
-            ``"single"``.
-        job_ids: Explicit URLs (used for the ``"selected"`` / ``"single"``
-            scopes only).
+    ``job_ids`` is only used for the ``selected`` and ``single`` scopes.
     """
     if scope == "all":
         return list(state.job_store.keys())

@@ -1,8 +1,9 @@
+// Row selection: shift-click ranges, ctrl/cmd-hover paint, bulk-select by category.
 'use strict';
 
 let _selectionAnchor = null;
 
-// Selectors of elements that should keep their default click behaviour.
+// Elements that should keep their native click behaviour (links, buttons, etc.).
 const _INTERACTIVE_SELECTOR =
     'a, button, label, input, [data-action], .rec-chip-overflow, .ops-dropdown-menu';
 
@@ -17,7 +18,6 @@ function _visibleJobRowsInOrder() {
     ).filter(r => r.style.display !== 'none');
 }
 
-// Apply selection state to a single row 
 function _setRowSelected(row, selected) {
     if (!row) return;
     const jobId = row.getAttribute('data-job-id');
@@ -33,9 +33,8 @@ function _setRowSelected(row, selected) {
     }
 }
 
-// After any selection change, sync the header checkbox state and the
-// toolbar action buttons (Rerun Selected count, etc.).  Mirrors what
-// toggleJobSelection in filters.js already does.
+// After any selection change, sync header checkbox + toolbar action buttons.
+// Mirrors what toggleJobSelection in filters.js does.
 function _syncHeaderAndToolbar() {
     const allCheckbox = document.getElementById('select-all-checkbox');
     if (allCheckbox) {
@@ -44,15 +43,16 @@ function _syncHeaderAndToolbar() {
             .filter(Boolean);
         const checkedCount = visibleCbs.filter(cb => cb.checked).length;
         allCheckbox.checked = checkedCount > 0 && checkedCount === visibleCbs.length;
-        // Indeterminate state — some-but-not-all selected.  Tri-state hint.
+        // Tri-state hint when some-but-not-all are selected.
         allCheckbox.indeterminate = checkedCount > 0 && checkedCount < visibleCbs.length;
     }
     if (typeof updateToolbarActions === 'function') updateToolbarActions();
+    // Selection counts toward Clear button's badge.
+    if (typeof updateClearFiltersButton === 'function') updateClearFiltersButton();
 }
 
-// Range select between two job IDs (inclusive), setting every row in the
-// range to `targetState`.  Uses current DOM order so the range honours the
-// active sort + filter combination.
+// Inclusive range select between two job IDs in current DOM order, so the
+// range respects the active sort + filter.
 function _applyRangeSelect(anchorJobId, currentJobId, targetState) {
     const rows = _visibleJobRowsInOrder();
     const ai = rows.findIndex(r => r.getAttribute('data-job-id') === anchorJobId);
@@ -63,18 +63,14 @@ function _applyRangeSelect(anchorJobId, currentJobId, targetState) {
     return true;
 }
 
-// Single-row toggle — keeps the existing change-event path's behaviour but
-// also keeps the visual .row-selected class in sync.
+// Toggle one row, keeping the .row-selected class in sync with the checkbox.
 function _toggleSingleRow(row) {
     const jobId = row.getAttribute('data-job-id');
     const willBeSelected = !appState.selectedJobs.has(jobId);
     _setRowSelected(row, willBeSelected);
 }
 
-// ---- Click handler -------------------------------------------------------
-//
-// Attached on DOMContentLoaded.  Uses event delegation against <tbody>.
-
+// Attached on DOMContentLoaded; delegates clicks from <tbody>.
 function _initSelectionEnhancements() {
     const tbody = document.querySelector('#job-table tbody');
     if (!tbody) return;
@@ -88,27 +84,25 @@ function _initSelectionEnhancements() {
             e.target.type === 'checkbox' &&
             e.target.dataset.action === 'select';
 
-        // Click on an interactive child that ISN'T the row's own checkbox →
-        // leave it alone (job-name link, expand icon, rerun button, etc.).
+        // Skip interactive children that aren't the row's own checkbox
+        // (job-name link, expand icon, rerun button, etc.).
         if (!isCheckbox && _isInteractive(e.target)) return;
 
         const jobId = row.getAttribute('data-job-id');
 
-        // ---- Shift+click → range select --------------------------------
+        // Shift+click → range select.
         if (e.shiftKey && _selectionAnchor && _selectionAnchor !== jobId) {
-            // Decide the target state from the anchor row's current state.
             const targetState = appState.selectedJobs.has(_selectionAnchor);
             const ok = _applyRangeSelect(_selectionAnchor, jobId, targetState);
             if (ok) {
                 e.preventDefault();
                 _syncHeaderAndToolbar();
-                // Clear text selection that shift+click would otherwise leave.
+                // Clear the text selection shift+click would otherwise leave.
                 if (window.getSelection) window.getSelection().removeAllRanges();
                 return;
             }
         }
 
-        // ---- Plain click ------------------------------------------------
         if (isCheckbox) {
             setTimeout(() => {
                 row.classList.toggle('row-selected', e.target.checked);
@@ -118,22 +112,15 @@ function _initSelectionEnhancements() {
             return;
         }
 
-        // Click on a non-interactive cell — toggle the row.
+        // Plain click on a non-interactive cell toggles the row.
         _toggleSingleRow(row);
         _selectionAnchor = jobId;
         _syncHeaderAndToolbar();
     });
 
-    // ---- Ctrl/Cmd + hover → paint-select -----------------------------
-    //
-    // Hold the modifier and move the cursor across rows; each row the
-    // cursor enters is added to the selection.  Like dragging a paint
-    // brush — fastest way to pick a contiguous group when shift+click
-    // is too precise.
-    //
-    // Tracked row prevents the same mouseover bursts (one per child
-    // element entered) from firing the handler multiple times for the
-    // same row.  We only act on transitions into a *new* row.
+    // Ctrl/Cmd + hover paint-select: hold the modifier and drag the cursor
+    // across rows to add each to the selection. _lastPaintRow debounces the
+    // mouseover bursts that fire as the cursor crosses child elements.
     let _lastPaintRow = null;
     tbody.addEventListener('mouseover', function(e) {
         const modifierHeld = e.ctrlKey || e.metaKey;
@@ -151,25 +138,21 @@ function _initSelectionEnhancements() {
         _lastPaintRow = null;
     });
 
-    // Cosmetic: change the row cursor to "cell" while the modifier is
-    // held so users see immediate feedback that paint-select is armed.
+    // Cursor cue: signal paint-select is armed while the modifier is held.
     document.addEventListener('keydown', function(e) {
         if (e.ctrlKey || e.metaKey) document.body.classList.add('paint-select-armed');
     });
     document.addEventListener('keyup', function(e) {
         if (!e.ctrlKey && !e.metaKey) document.body.classList.remove('paint-select-armed');
     });
-    // Releasing the tab (blur) should also clear the cursor cue.
     window.addEventListener('blur', () => document.body.classList.remove('paint-select-armed'));
 
-    // The select-all header checkbox should also clear the anchor — after
-    // a bulk toggle the next shift+click should start a fresh range.
+    // Select-all also resets the anchor so the next shift+click starts fresh.
     const all = document.getElementById('select-all-checkbox');
     if (all) {
         all.addEventListener('change', function() {
             _selectionAnchor = null;
-            // After toggleSelectAll runs (existing filters.js handler),
-            // re-paint the .row-selected class on every visible row.
+            // After toggleSelectAll (filters.js) runs, re-paint .row-selected.
             setTimeout(() => {
                 _visibleJobRowsInOrder().forEach(r => {
                     const sel = appState.selectedJobs.has(r.getAttribute('data-job-id'));
@@ -181,15 +164,14 @@ function _initSelectionEnhancements() {
     }
 }
 
-// Auto-init on DOMContentLoaded.  Idempotent — only one handler is attached.
+// Auto-init on DOMContentLoaded — idempotent, single handler.
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _initSelectionEnhancements);
 } else {
     _initSelectionEnhancements();
 }
 
-// Predicate for each named category.  Reads the job record carried on each
-// row via appState.jobs (so the rules match exactly what the table shows).
+// Predicate per category — read from appState.jobs so rules match the table.
 function _categoryPredicate(category) {
     switch (category) {
         case 'visible':
@@ -209,7 +191,7 @@ function _categoryPredicate(category) {
     }
 }
 
-// Apply the bulk selection.
+// Bulk-select all visible rows that match the named category.
 function selectByCategory(category) {
     if (category === 'clear') {
         appState.selectedJobs.clear();
@@ -240,10 +222,8 @@ function selectByCategory(category) {
     }
 }
 
-// Update live counts shown in the dropdown items, then toggle the menu.
-// Called via the trigger button's onclick.
+// Refresh live counts in the dropdown items, then toggle the menu.
 function openSelectDropdown() {
-    // Count visible rows matching each category.
     const rows = _visibleJobRowsInOrder();
     const counts = {
         visible: 0, failed: 0, unstable: 0, aborted: 0,
@@ -271,19 +251,19 @@ function openSelectDropdown() {
     set('sel-count-needs-rerun', counts.needs_rerun);
     set('sel-count-pending',     counts.pending);
 
-    // Promotion-only items appear only when a promotion time is set.
+    // Promotion-only items only show when a promotion time is set.
     const promoActive = !!(appState && appState.promotionTime);
     document.querySelectorAll('#ops-select-menu .promo-only').forEach(el => {
         el.style.display = promoActive ? '' : 'none';
     });
 
-    // Disable items with a count of 0 — keeps them visible (so users learn
-    // the menu structure) but un-clickable so nothing happens.
+    // Items with zero matches stay visible (menu structure stays familiar)
+    // but become un-clickable.
     document.querySelectorAll('#ops-select-menu .ops-dropdown-item').forEach(btn => {
         const countEl = btn.querySelector('.ops-dropdown-count');
         const txt = countEl ? countEl.textContent : '';
         const zero = countEl && (txt === '' || txt === '(0)');
-        // "All Visible" and "Clear Selection" are always enabled.
+        // "All Visible" + "Clear Selection" are always enabled.
         const alwaysOn = btn.textContent.trim().startsWith('All Visible') ||
                          btn.textContent.trim().startsWith('Clear Selection');
         btn.disabled = !alwaysOn && zero;

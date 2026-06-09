@@ -32,7 +32,6 @@ packages = ["jjat"]
 [tool.ruff]
 line-length = 100
 target-version = "py38"
-extend-exclude = ["mock"]   # mock_server has long data tables that don't lint cleanly
 
 [tool.ruff.lint]
 # E/F/W = pycodestyle / pyflakes basics
@@ -55,9 +54,9 @@ indent-style = "space"
 line-ending = "lf"
 
 
-# ---------------------------------------------------------------------------
+# ---
 # mypy — static type checking.
-# ---------------------------------------------------------------------------
+# ---
 [tool.mypy]
 python_version = "3.8"
 strict = true
@@ -66,4 +65,4 @@ warn_redundant_casts = true
 warn_return_any = true
 no_implicit_optional = true
 ignore_missing_imports = true
-exclude = ["^mock/", "^scripts/", "^build/", "^dist/"]
+exclude = ["^scripts/", "^build/", "^dist/"]

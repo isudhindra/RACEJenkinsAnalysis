@@ -1,26 +1,27 @@
-// auto-refresh.js
+// Background polling that keeps row statuses fresh without a full refetch.
+// Polls /api/poll-status every 30s, diffs against last seen, and pulls full
+// records for changed jobs so the table updates in place.
 'use strict';
 
 const AR_INTERVAL_MS = 30000;
 const AR_STORAGE_KEY = 'auto_refresh_enabled';
 const AR_FLASH_DURATION_MS = 1600;
 
-// Internal state — exposed under window for diagnostics only.
+// Exposed on window for diagnostics only.
 window._autoRefresh = {
-    enabled: null,         // tri-state: null = uninitialised, true/false = user choice
-    timer: null,           // setInterval handle
-    lastStatuses: new Map(), // jobId → "<build_number>:<status>" signature
-    inFlight: false,       // true while a poll is mid-request
+    enabled: null,         // null = uninitialised, true/false = user choice
+    timer: null,
+    lastStatuses: new Map(), // jobId → "<build_number>:<status>"
+    inFlight: false,
 };
 
-// ---- Preference persistence ------------------------------------------------
+//  Preference persistence 
 
 function _isAutoRefreshOn() {
     if (window._autoRefresh.enabled !== null) return window._autoRefresh.enabled;
     try {
         const stored = localStorage.getItem(AR_STORAGE_KEY);
-        // Default ON when the key is absent.
-        return stored === null ? true : stored === '1';
+        return stored === null ? true : stored === '1';   // default ON
     } catch (_) {
         return true;
     }
@@ -31,7 +32,7 @@ function _setAutoRefreshOn(on) {
     try { localStorage.setItem(AR_STORAGE_KEY, on ? '1' : '0'); } catch (_) {}
 }
 
-// ---- Guards ----------------------------------------------------------------
+//  Guards: reasons to skip a poll tick 
 
 function _shouldSkipThisTick() {
     if (document.hidden) return 'tab hidden';
@@ -42,12 +43,12 @@ function _shouldSkipThisTick() {
     return null;
 }
 
-// Build a stable signature string used to detect "anything changed for this job".
+// Stable signature used to detect "anything changed for this job".
 function _sig(buildNumber, status) {
     return (buildNumber == null ? '' : String(buildNumber)) + ':' + (status || '');
 }
 
-// ---- Core poll -------------------------------------------------------------
+//  Core poll 
 
 async function _pollOnce() {
     const skipReason = _shouldSkipThisTick();
@@ -70,21 +71,25 @@ async function _pollOnce() {
         });
 
         if (resp.status === 401 || resp.status === 403) {
-            // Credentials no longer valid — stop polling silently.
+            // Credentials no longer valid — stop silently.
             _stopAutoRefresh('auth');
             return;
         }
         if (!resp.ok) {
             diagLog && diagLog('warning', 'AutoRefresh', `Poll failed HTTP ${resp.status}`);
+            // Tell the freshness chip the data may be stale.
+            if (typeof markDataStale === 'function') markDataStale(`Poll HTTP ${resp.status}`);
             return;
         }
 
         const data = await resp.json();
         const statuses = Array.isArray(data.statuses) ? data.statuses : [];
+        // Stamp freshness even when nothing changed — release managers see a
+        // continuously-updating timestamp instead of a frozen one.
+        if (typeof markDataFresh === 'function') markDataFresh();
 
-        // Diff against last known signatures.  First poll seeds the cache
-        // with whatever the server reports, so no false-positive "everything
-        // changed" toast on startup.
+        // Diff against last seen signatures. The first poll just seeds the
+        // cache so we don't fire a false-positive "everything changed" toast.
         const changed = [];
         const isFirstPoll = window._autoRefresh.lastStatuses.size === 0;
 
@@ -99,37 +104,29 @@ async function _pollOnce() {
 
         if (!changed.length) return;
 
-        // Tier 2: pull the full record for each changed job so metrics and
-        // release_status stay correct.  Reuse the existing request path so
-        // promotion_time and credential resolution are identical.
-        // Cap to 3 in-flight requests at a time — Promise.all with a
-        // 50-job change burst used to fire 50 simultaneous /api/refresh-
-        // single calls, stalling the browser network stack on slower
-        // connections and saturating Jenkins.  Sliding-window pattern.
+        // For each changed job, pull the full record so metrics and
+        // release_status stay correct. Capped at 3 in-flight requests to
+        // avoid saturating the browser network stack + Jenkins on big bursts.
         await _runWithConcurrencyLimit(changed, _enrichChangedJob, 3);
 
-        // Status / build_number changed → the previous TRIGGERED chip (if
-        // any) has done its job; clear it immediately rather than waiting
-        // for the 10-second scheduleRerunBadgeCleanup timer.  Otherwise
-        // users see TRIGGERED alongside a fresh terminal status, which
-        // contradicts itself.
+        // Fresh status implicitly means any prior rerun has landed —
+        // clear the TRIGGERED chip immediately rather than waiting for
+        // the 10s scheduleRerunBadgeCleanup timer to avoid contradictory UI.
         changed.forEach(_clearRerunBadge);
 
-        // After enrichment, flash + toast.
         changed.forEach(_flashRow);
         _showAutoRefreshToast(changed.length);
 
     } catch (err) {
         diagLog && diagLog('warning', 'AutoRefresh', 'Poll error: ' + (err && err.message));
+        if (typeof markDataStale === 'function') markDataStale(err && err.message);
     } finally {
         window._autoRefresh.inFlight = false;
     }
 }
 
-// Sliding-window concurrency limiter.  Walks `items` and invokes `worker`
-// on each, keeping at most `limit` invocations in flight.  Returns when
-// every item is done.  Errors are caught per-item so one slow/failing
-// refresh doesn't abort the whole batch.
+// Sliding-window concurrency limiter — at most `limit` workers in flight.
+// Errors are swallowed per item since auto-refresh is best-effort.
 async function _runWithConcurrencyLimit(items, worker, limit) {
     let i = 0;
     async function pump() {
@@ -137,7 +134,7 @@ async function _runWithConcurrencyLimit(items, worker, limit) {
             const idx = i++;
             try {
                 await worker(items[idx]);
-            } catch (_) { /* swallow — auto-refresh is best-effort */ }
+            } catch (_) { /* best-effort */ }
         }
     }
     const runners = [];
@@ -165,41 +162,47 @@ async function _enrichChangedJob(jobUrl) {
         });
         if (!resp.ok) return;
         const data = await resp.json();
-        // Update the in-memory store + DOM via the same path the manual
-        // single-row refresh uses.
+        // Merge into the existing record — never replace. The backend returns
+        // job_name/job_url but the UI reads name/url, and a wholesale replace
+        // strips those fields and breaks search.
         if (data && data.job_url) {
-            data.latest_status = data.current_status;  // mirror the streaming.js mapping
-            appState.jobs.set(data.job_url, data);
+            const existing = appState.jobs.get(data.job_url) || {};
+            const merged = Object.assign({}, existing, data, {
+                latest_status: data.current_status,
+                // Preserve canonical name/url that the rest of the frontend reads.
+                name: data.job_name || existing.name,
+                url:  data.job_url  || existing.url,
+                job_id: existing.job_id || data.job_url,
+            });
+            appState.jobs.set(data.job_url, merged);
             if (typeof updateJobRow === 'function') {
-                updateJobRow(data.job_url, data);
+                updateJobRow(data.job_url, merged);
             }
         }
     } catch (_) {
-        // Silent — keep the loop running.
+        // Stay silent so the polling loop keeps running.
     }
 }
 
-// ---- Visual feedback -------------------------------------------------------
+//  Visual feedback 
 
 function _flashRow(jobUrl) {
-    const row = document.querySelector(`tr[data-job-id="${CSS.escape(jobUrl)}"]:not(.detail-row)`);
+    const row = getJobRowEl(jobUrl);
     if (!row) return;
     row.classList.remove('row-auto-refresh-flash');
-    // Force reflow so the animation restarts if it's already running.
+    // Force reflow so the animation restarts when it's already running.
     void row.offsetWidth;
     row.classList.add('row-auto-refresh-flash');
     setTimeout(() => row.classList.remove('row-auto-refresh-flash'), AR_FLASH_DURATION_MS + 100);
 }
 
-// Remove the small TRIGGERED chip for a job once we have proof the rerun
-// has taken effect (status or build_number has moved on).  Mirrors the
-// DOM + state cleanup that scheduleRerunBadgeCleanup does on a 10s timer,
-// but without the wait — fresh status implicitly means the trigger landed.
+// Drop the TRIGGERED chip immediately when fresh status arrives —
+// implicit proof the rerun landed, so no need to wait for the 10s timer.
 function _clearRerunBadge(jobUrl) {
     if (appState && appState.rerunStates) {
         appState.rerunStates.delete(jobUrl);
     }
-    const row = document.querySelector(`tr[data-job-id="${CSS.escape(jobUrl)}"]:not(.detail-row)`);
+    const row = getJobRowEl(jobUrl);
     if (!row) return;
     const badge = row.querySelector('.badge-rerun');
     if (badge) badge.remove();
@@ -212,14 +215,21 @@ function _showAutoRefreshToast(n) {
     }
 }
 
-// ---- Lifecycle -------------------------------------------------------------
+//  Lifecycle 
 
 function _startAutoRefresh() {
     if (window._autoRefresh.timer) return;
-    window._autoRefresh.lastStatuses.clear();  // fresh start
+    window._autoRefresh.lastStatuses.clear();
+    // Seed the cache from the already-fetched jobs so the FIRST poll can
+    // detect changes — otherwise we'd burn a 30s tick just learning the baseline.
+    if (window.appState && window.appState.jobs) {
+        window.appState.jobs.forEach((job, jobUrl) => {
+            const sig = _sig(job.last_build_number, job.latest_status);
+            window._autoRefresh.lastStatuses.set(jobUrl, sig);
+        });
+    }
     window._autoRefresh.timer = setInterval(_pollOnce, AR_INTERVAL_MS);
-    // Fire one poll quickly so the cache is seeded; first real diff happens
-    // on the second tick 30s later.
+    // Fire one quick poll so changes surface immediately, not in 30s.
     setTimeout(_pollOnce, 1500);
 }
 
@@ -231,7 +241,7 @@ function _stopAutoRefresh(_reason) {
     window._autoRefresh.lastStatuses.clear();
 }
 
-// Public toggle — bound to the toolbar button.
+// Bound to the toolbar Auto button.
 function toggleAutoRefresh() {
     const next = !_isAutoRefreshOn();
     _setAutoRefreshOn(next);
@@ -249,25 +259,23 @@ function _updateAutoRefreshButton(on) {
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     btn.classList.toggle('auto-refresh-on', !!on);
     btn.classList.toggle('auto-refresh-off', !on);
+    // Label stays "Auto" — colour conveys on/off, aria-pressed handles a11y.
     const label = btn.querySelector('.btn-auto-refresh-label');
-    if (label) label.textContent = on ? 'Auto: ON' : 'Auto: OFF';
+    if (label) label.textContent = 'Auto';
 }
 
-// Visibility API — pause when the tab is hidden, resume when it returns.
+// Pause polling while the tab is hidden; resume on return.
 document.addEventListener('visibilitychange', () => {
     if (!_isAutoRefreshOn()) return;
     if (document.hidden) {
         // Leave the timer running — _shouldSkipThisTick handles the skip.
-        // We don't fully stop because resumption is implicit.
     } else {
-        // Tab back in foreground — poll once immediately so the user sees
-        // current state without waiting up to 30 more seconds.
+        // Foreground again — poll immediately rather than wait up to 30s.
         setTimeout(_pollOnce, 250);
     }
 });
 
-// Bootstrap: started by app.js after the first successful fetch populates
-// appState.jobs.  Exposed for that integration point.
+// Called by app.js after the first successful fetch populates appState.jobs.
 function initAutoRefresh() {
     const on = _isAutoRefreshOn();
     _setAutoRefreshOn(on);  // normalise + persist default

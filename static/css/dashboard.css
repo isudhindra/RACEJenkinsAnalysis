@@ -1,4 +1,4 @@
-/* ========== RESET & BASE ========== */
+/* == RESET & BASE == */
 * {
     margin: 0;
     padding: 0;
@@ -15,7 +15,7 @@ body {
     background-color: var(--color-canvas);
 }
 
-/* ========== DESIGN SYSTEM TOKENS ========== */
+/* == DESIGN SYSTEM TOKENS == */
 :root {
     /* — Semantic status colors — */
     --color-passed: #22C55E;
@@ -131,23 +131,96 @@ body {
     --surface-hover-tint: rgba(59, 130, 246, 0.03);
     --surface-active-tint: rgba(59, 130, 246, 0.06);
 
-    /* — Breakpoint tokens (CSS item 7) — */
-    /* Usage: @media (max-width: 1024px) etc. — kept as comments for reference */
-    /* --bp-xl: 1200px; --bp-lg: 1024px; --bp-md: 768px; --bp-sm: 640px; */
+    /* Breakpoints (reference values used in @media queries below):
+     *   xl 1200px, lg 1024px, md 768px, sm 640px. */
 }
 
 .hidden {
     display: none !important;
 }
 
-/* ========== ENV-AUTH BANNER ==========
- * Shown above the manual username/api-token fields when JENKINS_TEST_*
- * env vars are detected — gives the user a one-click auth path.  These
- * rules used to live as a dynamically-injected <style> tag inside
- * config.js; moved here so the CSS is auditable and benefits from
- * static-file caching.  config.js still injects the DOM nodes
- * conditionally — the styles just match whenever they exist.
- */
+
+/* Clear-filters button. Matches the neighbouring filter <select>s in height
+ * and border weight so the pills group reads as one aligned row.
+ * Double class (.ops-btn.ops-btn-clear-filters) beats the theme's !important
+ * .ops-btn-ghost rule. */
+.ops-btn.ops-btn-clear-filters {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 32px;                      /* match .ops-btn / .ops-select height */
+    padding: 0 10px;
+    border-width: 2px !important;      /* match the brutalist 2px borders */
+    border-style: solid !important;
+}
+/* Two alignment traps to be aware of:
+ *  1. line-height: 28px + vertical-align: top — without these the button
+ *     text sits ~1px lower than the neighbouring <select> text because
+ *     selects use their line-box baseline (not flex centering).
+ *  2. :disabled border re-assertion — the theme's disabled rule has higher
+ *     specificity and would otherwise paint a grey border. */
+.ops-btn.ops-btn-clear-filters {
+    color: var(--theme-black, #0B0C0C) !important;
+    background: var(--theme-white, #FFFFFF) !important;
+    border-color: var(--theme-black, #0B0C0C) !important;
+    box-shadow: none !important;
+    line-height: 28px !important;
+    vertical-align: top !important;
+    box-sizing: border-box !important;
+}
+.ops-btn.ops-btn-clear-filters[disabled] {
+    cursor: not-allowed;
+    opacity: 0.45;
+    border-color: var(--theme-black, #0B0C0C) !important;
+    background: var(--theme-white, #FFFFFF) !important;
+}
+.ops-btn.ops-btn-clear-filters:not([disabled]) {
+    color: #B91C1C !important;            /* red signals "remove" */
+}
+.ops-btn.ops-btn-clear-filters:not([disabled]):hover {
+    background: #FEF2F2 !important;
+}
+
+/* Mirror the alignment rules on the filter selects so the whole row lines up. */
+#filter-status,
+#filter-release-status {
+    vertical-align: top !important;
+    line-height: 28px !important;
+}
+.ops-btn-clear-label {
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+/* Auto-refresh toggle — tightened to a one-word label. State is conveyed
+ * by colour (.auto-refresh-on / .auto-refresh-off). */
+#btn-auto-refresh {
+    padding: 0 8px;
+    gap: 4px;
+}
+#btn-auto-refresh .btn-auto-refresh-label {
+    font-size: 11px;
+}
+.ops-clear-filter-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 5px;
+    margin-left: 2px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #fff;
+    background: #B91C1C;
+    border-radius: 8px;
+    line-height: 1;
+}
+.ops-clear-filter-count[hidden] {
+    display: none;
+}
+
+/* == ENV-AUTH BANNER ==*/
 .env-auth-section {
     display: block;
     margin-top: 12px;
@@ -225,7 +298,7 @@ body {
     cursor: not-allowed;
 }
 
-/* ========== ACCESSIBILITY ========== */
+/* == ACCESSIBILITY == */
 @media (prefers-reduced-motion: reduce) {
     * {
         animation-duration: 0.01ms !important;
@@ -244,7 +317,7 @@ a:hover {
     text-decoration: underline;
 }
 
-/* ========== LAYOUT ========== */
+/* == LAYOUT == */
 body {
     display: flex;
     flex-direction: column;
@@ -262,8 +335,8 @@ main {
     position: relative;
 }
 
-/* ========== HEADER ========== */
-/* ── Enterprise Header ── */
+/* == HEADER == */
+/*  Enterprise Header  */
 .app-header {
     background: linear-gradient(180deg, #0D1321 0%, #0F172A 40%, #1E293B 100%);
     color: #F1F5F9;
@@ -428,6 +501,63 @@ main {
     white-space: nowrap;
 }
 
+/* Freshness chip — sits next to the system status chip and shows the
+ * timestamp of the most recent successful data refresh.  Goes red when
+ * the data is known to be stale (latest poll failed). */
+.header-freshness-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(241, 245, 249, 0.85);
+    font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    transition: background 200ms ease, border-color 200ms ease, color 200ms ease;
+}
+.header-freshness-chip.is-stale {
+    background: rgba(220, 38, 38, 0.18);
+    border-color: rgba(248, 113, 113, 0.5);
+    color: #FCA5A5;
+}
+.header-freshness-chip[hidden] {
+    display: none;
+}
+
+/* Header icon button — used for the Diagnostics toggle moved out of
+ * the toolbar.  Translucent dark surface to match the header chrome. */
+.header-icon-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: rgba(241, 245, 249, 0.85);
+    cursor: pointer;
+    transition: all var(--transition-normal);
+}
+
+.header-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.18);
+    color: #FFFFFF;
+}
+
+.header-icon-btn:focus-visible {
+    outline: 2px solid rgba(99, 102, 241, 0.7);
+    outline-offset: 1px;
+}
+
 .header-status-chip {
     display: flex;
     align-items: center;
@@ -520,7 +650,7 @@ main {
     color: #FCA5A5;
 }
 
-/* ========== CONFIG PANEL ========== */
+/* == CONFIG PANEL == */
 #config-panel {
     background: var(--color-panel);
     border-bottom: 1px solid var(--color-border);
@@ -639,7 +769,7 @@ main {
     padding: 4px 32px 20px;
 }
 
-/* ========== CONFIGURATION WORKSPACE SURFACE ========== */
+/* == CONFIGURATION WORKSPACE SURFACE == */
 .config-steps-wrapper {
     --_cfg-grad: linear-gradient(135deg, #FDF2F8, #FCE7F3 18%, #F5F3FF 48%, #EEF2FF 72%, #F0F9FF);
     max-width: 960px;
@@ -904,13 +1034,23 @@ main {
     display: none;
 }
 
+/* Informational hint shown under a select/input — distinct from the
+ * red .cfg-error.  Used to warn that custom job lists may contain
+ * jobs not present in the selected Jenkins instance. */
+.cfg-group .cfg-hint {
+    margin: 6px 0 0;
+    font-size: 11px;
+    color: var(--color-text-tertiary, #64748B);
+    line-height: 1.5;
+}
+
 .cfg-group .cfg-success {
     font-size: 11px;
     color: #16A34A;
     display: none;
 }
 
-/* ========== CUSTOM URL FIELD ========== */
+/* == CUSTOM URL FIELD == */
 .cfg-custom-url-group {
     max-height: 0;
     overflow: hidden;
@@ -998,7 +1138,7 @@ main {
     gap: 8px;
 }
 
-/* ========== PREMIUM BUTTON SYSTEM ========== */
+/* == PREMIUM BUTTON SYSTEM == */
 .cfg-btn {
     padding: 8px 16px;
     border-radius: var(--radius-sm);
@@ -1245,7 +1385,7 @@ main {
     font-weight: 600;
 }
 
-/* ========== SOURCE MODE TABS ========== */
+/* == SOURCE MODE TABS == */
 .source-mode-tabs {
     display: flex;
     gap: 0;
@@ -1344,10 +1484,18 @@ main {
     gap: 6px;
 }
 
-/* ========== ENHANCED PROGRESS BAR ========== */
-/* The progress bar is positioned as an overlay so it never steals
-           flex space from .table-container.  It floats at the bottom of
-           <main>, above the table content, via absolute positioning.     */
+/* All buttons inside the fetch-actions row share the same minimum width
+ * so "Fetch Jobs", "Update Jobs", "Refresh Failed", and "Clear Session"
+ * line up as equal-sized pills.  Width is driven by the longest label
+ * ("Clear Session"); shorter labels just centre inside that. */
+.fetch-actions .cfg-btn {
+    min-width: 118px;
+    justify-content: center;
+}
+
+/* == ENHANCED PROGRESS BAR == */
+/* Floats at the bottom of <main> as an absolute overlay so it doesn't take
+ * flex space from the table during fetches. */
 #progress-bar {
     display: none;
     padding: 0;
@@ -1610,7 +1758,7 @@ main {
     flex-shrink: 0;
 }
 
-/* ========== MOTION — STORYTELLING NARRATIVE STRIP ========== */
+/* == MOTION — STORYTELLING NARRATIVE STRIP == */
 
 .motion-narrative {
     display: flex;
@@ -1783,7 +1931,7 @@ main {
     }
 }
 
-/* ========== MOTION — KPI REVEAL ========== */
+/* == MOTION — KPI REVEAL == */
 
 /* KPI metrics start hidden until data arrives; prevents static right side */
 .kpi-container.kpi-waiting .kpi-metric {
@@ -1878,7 +2026,7 @@ main {
     }
 }
 
-/* ========== MOTION — ENRICHMENT PULSE ========== */
+/* == MOTION — ENRICHMENT PULSE == */
 
 /* Full-row enrichment glow — symmetric highlight that sweeps across both sides */
 tbody tr.motion-enrich-pulse {
@@ -1929,7 +2077,7 @@ tbody tr.motion-enrich-pulse td:nth-child(n+9) {
     }
 }
 
-/* ========== ROW PROGRESSIVE RENDERING ========== */
+/* == ROW PROGRESSIVE RENDERING == */
 
 @keyframes row-slide-in {
     0% {
@@ -1964,12 +2112,8 @@ tbody tr.motion-enrich-pulse td:nth-child(n+9) {
     }
 }
 
-/* Row entry animation — ONLY applied while .row-fresh is set, which the
- * batch renderer adds on insertion and removes after the animation
- * completes.  Previously this rule fired on every tr[data-job-id]
- * unconditionally, which meant filter toggles (display:none → '')
- * restarted the animation and cells faded in from opacity:0 for up to
- * a second — read by users as "empty fields loading data". */
+/* Row entry animation. Gated on .row-fresh (set by the batch renderer on
+ * insert, cleared after the animation) so filter toggles don't replay it. */
 tbody tr[data-job-id].row-fresh {
     animation: row-slide-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
     /* animation-delay is set inline by the batch renderer; capped at 0.7s */
@@ -2120,7 +2264,7 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     }
 }
 
-/* ========== TABLE LOADING INDICATOR & SKELETON ROWS ========== */
+/* == TABLE LOADING INDICATOR & SKELETON ROWS == */
 .table-loading-indicator {
     display: flex;
     align-items: center;
@@ -2203,8 +2347,8 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
 }
 
 
-/* ========== KPI CONTAINER — dual-panel layout ========== */
-/* ========== KPI SUMMARY — clean text-only metric strip ========== */
+/* == KPI CONTAINER — dual-panel layout == */
+/* == KPI SUMMARY — clean text-only metric strip == */
 .kpi-container {
     display: flex;
     border-bottom: 1px solid var(--color-border);
@@ -2553,7 +2697,7 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     padding: 0;
 }
 
-/* ========== UNIFIED OPS TOOLBAR ========== */
+/* == UNIFIED OPS TOOLBAR == */
 .ops-toolbar {
     position: sticky;
     top: 0;
@@ -2566,7 +2710,8 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
 .ops-toolbar-row {
     display: flex;
     align-items: center;
-    gap: 5px;
+    /* Inter-group gap > intra-group gap so groups read as clusters. */
+    gap: 12px;
     padding: 8px 14px;
     flex-wrap: wrap;
 }
@@ -2575,38 +2720,212 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     border-bottom: 1px solid #D1D5DB;
 }
 
-/* Group containers */
+/* Tighter intra-group spacing — pairs with the toolbar-row 12px gap above. */
 .ops-group {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
 }
 
 .ops-group--actions {
     flex: 0 1 auto;
-    flex-wrap: wrap;
 }
 
-.ops-group--filters {
+.ops-group--filters,
+.ops-group--filters-pills {
     flex: 0 0 auto;
 }
 
+/* - View-mode segmented control (Detail | Summary) - */
+/* Two pills joined at the seam. Active segment inverts to black-on-white. */
+.ops-segmented {
+    display: inline-flex;
+    align-items: stretch;
+    border-radius: 0;
+    overflow: hidden;
+}
+
+.ops-segment {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 32px;
+    padding: 0 12px;
+    font-size: 11.5px;
+    font-weight: 600;
+    font-family: inherit;
+    background: #FFFFFF;
+    color: var(--color-text-primary, #0F172A);
+    border: 1.5px solid #B0B8C4;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+    white-space: nowrap;
+}
+
+.ops-segment + .ops-segment {
+    border-left-width: 0;
+}
+
+.ops-segment:hover {
+    background: #F1F5F9;
+}
+
+.ops-segment.is-active {
+    background: #0F172A;
+    color: #FFFFFF;
+}
+
+.ops-segment.is-active:hover {
+    background: #1E293B;
+}
+
+.ops-segment svg {
+    opacity: 0.75;
+}
+
+.ops-segment.is-active svg {
+    opacity: 1;
+}
+
+/* - Refresh split-button - */
+/* Variant of .ops-dropdown: main button = Refresh All, caret = scoped menu. */
+.ops-split {
+    display: inline-flex;
+    align-items: stretch;
+}
+
+.ops-split .ops-split-main {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right-width: 0;
+}
+
+.ops-split .ops-split-caret {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    padding: 0 6px;
+    min-width: auto;
+}
+
+.ops-split .ops-split-caret .ops-dropdown-caret {
+    margin: 0;
+}
+
+.ops-split .ops-dropdown-menu {
+    left: 0;
+    right: auto;
+}
+
+/* - Failures button "empty" state - */
+/* Stays in the reserved slot but dimmed so the control has a predictable
+ * home even when there are no failures to act on. */
+.ops-btn-action.is-empty {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.ops-btn-action.is-empty:hover {
+    opacity: 0.55;
+}
+
+.ops-btn-action.is-empty .ops-badge-danger {
+    background: #94A3B8;
+    color: #0F172A;
+}
+
+/* - Zone separator between action group and filter group - */
+/* Heavier than .ops-sep — marks the boundary between "act on rows" and
+ * "narrow the view". */
+.ops-sep.ops-sep--zone {
+    background: #94A3B8;
+    width: 1px;
+    height: 28px;
+    margin: 0 6px;
+    align-self: center;
+}
+
+/* Default: Log-Analysis + Search stay inline in the action row at natural
+ * widths. Below 1500px (media query further down) they wrap onto their own
+ * row and split 50/50. */
+.ops-group--filters-search {
+    flex: 0 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ops-group--filters-search > .la-filter-wrap,
+.ops-group--filters-search > .ops-search-wrap {
+    flex: 0 1 auto;
+}
+
+/* Dead rule kept as a safeguard if .ops-toolbar-spacer ever returns. */
 .ops-toolbar-spacer {
     flex: 1 1 0;
     min-width: 0;
     align-self: stretch;
 }
 
-@media (min-width: 1280px) and (max-width: 1500px) {
+/* = Responsive toolbar =
+ * Keep all button labels readable at every laptop width. When the filter
+ * group naturally wraps below ~1500px, stretch it to span the toolbar so the
+ * wrap looks intentional. Only drop CSV / Failures labels at <950px. */
 
-    #btn-auto-refresh .btn-auto-refresh-label,
-    button[onclick="exportCSV()"] span,
+/* <1500px: wrap the Log-Analysis + Search group onto its own row and split
+ * the two inputs 50/50. */
+@media (max-width: 1500px) {
+    .ops-group--filters-search {
+        flex: 1 1 100%;
+        margin-top: 6px;
+    }
+
+    .ops-group--filters-search > .la-filter-wrap,
+    .ops-group--filters-search > .ops-search-wrap {
+        flex: 1 1 0;
+        min-width: 0;
+    }
+
+    .ops-group--filters-search .la-filter-input,
+    .ops-group--filters-search .ops-search {
+        width: 100%;
+    }
+
+    /* In Summary mode the search input is alone — cap and right-align it so
+     * it doesn't stretch absurdly wide. Uses :has(); the no-:has fallback
+     * is the previous full-width behaviour. */
+    .ops-group--filters-search:has(> .la-filter-wrap[style*="display:none"]),
+    .ops-group--filters-search:has(> .la-filter-wrap[style*="display: none"]) {
+        justify-content: flex-end;
+    }
+
+    .ops-group--filters-search:has(> .la-filter-wrap[style*="display:none"]) > .ops-search-wrap,
+    .ops-group--filters-search:has(> .la-filter-wrap[style*="display: none"]) > .ops-search-wrap {
+        flex: 0 1 360px;
+    }
+}
+
+/* <1100px: tighten gaps + padding to avoid the table horizontal-scrolling. */
+@media (max-width: 1100px) {
+    .ops-toolbar-row {
+        gap: 4px;
+        padding: 6px 10px;
+    }
+
+    .ops-group {
+        gap: 4px;
+    }
+}
+
+/* <950px: drop the CSV + Failures labels (icons remain recognisable). */
+@media (max-width: 950px) {
+    button[onclick="exportCSV()"] .ops-btn-label,
     #ops-failure-view-label {
         display: none;
     }
 }
 
-/* ---- Shared control base ---- */
+/*  Shared control base  */
 .ops-select,
 .ops-search,
 .ops-btn {
@@ -2653,7 +2972,7 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     outline: none;
 }
 
-/* ========== LOG ANALYSIS FILTER — searchable autocomplete ========== */
+/* == LOG ANALYSIS FILTER — searchable autocomplete == */
 .la-filter-wrap {
     position: relative;
     display: inline-flex;
@@ -2784,8 +3103,7 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     letter-spacing: 0;
 }
 
-/* Compact "(N)" badge inside the la-filter input.  Sits to the
-         * left of the clear X.  Tooltip on hover shows the full list. */
+/* Selected-count badge inside the LA filter input. Hover shows full list. */
 .la-filter-count {
     position: absolute;
     right: 28px;
@@ -2874,7 +3192,7 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     box-shadow: var(--shadow-ring-focus);
 }
 
-/* ---- Button variants ---- */
+/*  Button variants  */
 .ops-btn {
     display: inline-flex;
     align-items: center;
@@ -2908,7 +3226,13 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     opacity: 1;
 }
 
-.ops-btn[style*="display: none"]+.ops-sep {
+/* Hide a separator that immediately follows a hidden button/dropdown.
+ * Matches both `display: none` and `display:none` so it survives either
+ * inline-style spelling JS might set. */
+.ops-btn[style*="display: none"] + .ops-sep,
+.ops-btn[style*="display:none"] + .ops-sep,
+.ops-dropdown[style*="display: none"] + .ops-sep,
+.ops-dropdown[style*="display:none"] + .ops-sep {
     display: none;
 }
 
@@ -2976,22 +3300,6 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
 .ops-btn-secondary:hover {
     background: #F1F5F9;
     border-color: #64748B;
-}
-
-/* View toggle */
-.ops-btn-view {
-    background: linear-gradient(180deg, #FFFFFF 0%, #F0FDF4 100%);
-    border-color: #86EFAC;
-    color: #166534;
-    font-weight: 700;
-}
-
-.ops-btn-view:hover {
-    background: linear-gradient(180deg, #F0FDF4 0%, #DCFCE7 100%);
-    border-color: #4ADE80;
-    color: #15803D;
-    box-shadow: 0 2px 8px rgba(74, 222, 128, 0.2), var(--shadow-glow-green);
-    transform: translateY(-0.5px);
 }
 
 /* Ghost button (clear) */
@@ -3075,7 +3383,7 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     flex-shrink: 0;
 }
 
-/* ---- Dropdown menu ---- */
+/*  Dropdown menu  */
 .ops-dropdown {
     position: relative;
     display: inline-flex;
@@ -3167,10 +3475,41 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     font-style: italic;
 }
 
-/* Saved-view row — Apply on the left, Delete X on the right.  Inherits
- * from .ops-dropdown-item for the bulk of styling; this layer just
- * arranges the two buttons side by side and shows the muted "meta"
- * subtitle under the bookmark name. */
+/* Saved-view row: Apply on the left, Delete X on the right. */
+/* Inline save bar at the top of the saved-views menu (replaces prompt()). */
+.ops-saved-view-savebar {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    padding: 6px;
+    border-bottom: 1px solid var(--color-border, #D1D5DB);
+}
+.ops-saved-view-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: inherit;
+    border: 1px solid #CBD5E1;
+    border-radius: 4px;
+    background: #FFFFFF;
+    color: var(--color-text-primary, #0F172A);
+}
+.ops-saved-view-input:focus {
+    outline: none;
+    border-color: #6366F1;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+.ops-saved-view-savebtn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+.ops-saved-view-hint {
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #B91C1C;
+    background: #FEF2F2;
+}
 .ops-saved-view-row {
     display: flex;
     align-items: stretch;
@@ -3216,7 +3555,7 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     background: #FEF2F2;
 }
 
-/* ---- Promotion / Release Validation Panel ---- */
+/*  Promotion / Release Validation Panel  */
 .ops-promo-row {
     background: linear-gradient(135deg, #EEF2FF 0%, #F5F7FF 40%, #FFFBEB 100%);
     padding: 8px 16px;
@@ -3249,7 +3588,7 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     flex-shrink: 0;
 }
 
-/* ========== TABLE ========== */
+/* == TABLE == */
 .table-container {
     flex: 1;
     overflow: auto;
@@ -3259,8 +3598,7 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     min-height: 0;
 }
 
-/* When the progress-bar overlay is visible, add bottom padding so
-           the last table rows are not hidden behind the floating banner. */
+/* Extra bottom padding so the floating progress overlay can't cover rows. */
 .table-container.has-progress-overlay {
     padding-bottom: 140px;
 }
@@ -3489,7 +3827,7 @@ th[data-sort-dir="desc"] .th-sort-icon {
     white-space: nowrap;
 }
 
-/* ========== PROMOTION CONTROLS (inside ops-toolbar) ========== */
+/* == PROMOTION CONTROLS (inside ops-toolbar) == */
 .promo-icon {
     color: #4F46E5;
     flex-shrink: 0;
@@ -3579,6 +3917,32 @@ th[data-sort-dir="desc"] .th-sort-icon {
     cursor: pointer;
     transition: all 0.12s ease;
     white-space: nowrap;
+}
+
+/* Outlined to stay subordinate to the primary "Rerun Regression Jobs" CTA. */
+.promo-copy-summary-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    padding: 4px 10px;
+    height: 28px;
+    border: 1px solid #CBD5E1;
+    border-radius: 4px;
+    background: #FFFFFF;
+    color: var(--color-text-primary, #0F172A);
+    cursor: pointer;
+    transition: all 0.14s ease;
+    white-space: nowrap;
+}
+.promo-copy-summary-btn:hover {
+    background: #F1F5F9;
+    border-color: #94A3B8;
+}
+.promo-copy-summary-btn:active {
+    background: #E2E8F0;
 }
 
 .promo-clear-btn:hover {
@@ -4140,10 +4504,10 @@ td {
     color: var(--color-text-tertiary);
 }
 
-/* Execution time cell */
+/* "Last Run" column. Primary colour + 12px so timestamps are scannable. */
 .cell-exec-time {
-    font-size: 10.5px;
-    color: var(--color-text-secondary);
+    font-size: 12px;
+    color: var(--color-text-primary);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     letter-spacing: -0.01em;
@@ -4155,6 +4519,7 @@ td {
     position: relative;
 }
 
+/* Kept for forward-compat in case the resting colour ever becomes muted. */
 .exec-time-full:hover {
     color: var(--color-text-primary);
 }
@@ -4170,7 +4535,7 @@ td {
     color: var(--color-text-secondary);
 }
 
-/* ── Log Analysis label chip ── */
+/*  Log Analysis label chip  */
 .cell-log-analysis {
     vertical-align: middle;
     line-height: 1.4;
@@ -4178,13 +4543,37 @@ td {
     white-space: normal;
 }
 
-/* Compact chip container — wraps onto two rows max */
+/* Wrapper added by rendering.js for multi-label jobs (>1 chip). Row gap >
+ * column gap so wrapped chips have breathing room vertically. */
 .rec-chip-row {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 3px;
+    gap: 4px 3px;          /* row 4px, column 3px */
     max-width: 100%;
+    padding: 3px 5px;
+    background: #F8FAFC;   /* slate-50 — barely-there background */
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+}
+.rec-chip-row::before {
+    /* Compact "n" counter that doubles as a visual anchor for the group */
+    content: attr(data-count);
+    font-size: 9.5px;
+    font-weight: 700;
+    color: #64748B;
+    background: #fff;
+    border: 1px solid #CBD5E1;
+    border-radius: 9px;
+    padding: 0 5px;
+    min-width: 16px;
+    text-align: center;
+    line-height: 14px;
+    letter-spacing: 0.02em;
+}
+.rec-chip-row[data-count=""]::before,
+.rec-chip-row:not([data-count])::before {
+    content: none;
 }
 
 .rec-chip {
@@ -4213,7 +4602,8 @@ td {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-/* Overflow indicator (+N more) */
+/* "+N more" inline toggle. Click expands/collapses hidden chips in place
+ * (replaces an earlier floating-tooltip approach that had cursor-trap bugs). */
 .rec-chip-overflow {
     display: inline-flex;
     align-items: center;
@@ -4227,69 +4617,27 @@ td {
     background: #F1F5F9;
     color: #475569;
     border: 1px solid #CBD5E1;
-    cursor: default;
+    cursor: pointer;
     flex-shrink: 0;
-    position: relative;
+    font-family: inherit;
     transition: background var(--transition-micro), border-color var(--transition-micro);
 }
-
 .rec-chip-overflow:hover {
     background: #E2E8F0;
     border-color: #94A3B8;
 }
-
-/* Tooltip popover for overflow labels */
-.rec-chip-tooltip {
-    display: none;
-    position: absolute;
-    bottom: calc(100% + 8px);
-    right: -4px;
-    z-index: 100;
-    min-width: 180px;
-    max-width: 300px;
-    padding: 8px 10px;
-    background: #1E293B;
-    color: #F1F5F9;
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1);
-    font-size: 11.5px;
-    font-weight: 500;
-    line-height: 1.55;
-    white-space: normal;
-    pointer-events: none;
+.rec-chip-overflow:focus-visible {
+    outline: 2px solid #3B82F6;
+    outline-offset: 1px;
 }
 
-.rec-chip-tooltip::after {
-    content: '';
-    position: absolute;
-    top: 100%;
-    right: 12px;
-    border: 5px solid transparent;
-    border-top-color: #1E293B;
+/* Hidden until the parent gets .is-expanded. !important because the theme's
+ * [class*="-chip"] rule uses !important and could otherwise win. */
+.rec-chip-overflow-hidden {
+    display: none !important;
 }
-
-.rec-chip-overflow:hover .rec-chip-tooltip {
-    display: block;
-}
-
-.rec-chip-tooltip-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 0;
-}
-
-.rec-chip-tooltip-item+.rec-chip-tooltip-item {
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    margin-top: 2px;
-    padding-top: 4px;
-}
-
-.rec-chip-tooltip-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    flex-shrink: 0;
+.rec-chip-row.is-expanded .rec-chip-overflow-hidden {
+    display: inline-flex !important;
 }
 
 .rec-chip-dot {
@@ -4377,7 +4725,7 @@ td {
 }
 
 
-/* ========== BADGES ========== */
+/* == BADGES == */
 .badge {
     display: inline-flex;
     align-items: center;
@@ -4393,7 +4741,7 @@ td {
     text-overflow: clip;
 }
 
-/* Badge status colors via data-attribute (CSS item 9) */
+/* Per-status fill colours via data-status. */
 .badge-passed,
 .badge-status[data-status="passed"] {
     background: var(--color-passed-muted);
@@ -4512,7 +4860,7 @@ td {
     background-color: var(--color-text-tertiary);
 }
 
-/* ========== ICONS & INTERACTIONS — Premium treatment ========== */
+/* == ICONS & INTERACTIONS — Premium treatment == */
 .icon {
     cursor: pointer;
     user-select: none;
@@ -4655,7 +5003,7 @@ td {
     gap: 3px;
 }
 
-/* ========== EMPTY STATE ========== */
+/* == EMPTY STATE == */
 .empty-state {
     padding: var(--space-12) var(--space-6);
     text-align: center;
@@ -4709,7 +5057,7 @@ td {
     line-height: 1.6;
 }
 
-/* ========== TOASTS ========== */
+/* == TOASTS == */
 .toast {
     position: fixed;
     bottom: var(--space-6);
@@ -4788,7 +5136,7 @@ td {
     font-weight: 600;
 }
 
-/* ========== SCROLLBAR ========== */
+/* == SCROLLBAR == */
 ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -4807,7 +5155,7 @@ td {
     background: #9CA3AF;
 }
 
-/* ========== DEGRADED INDICATOR ========== */
+/* == DEGRADED INDICATOR == */
 .degraded-indicator {
     display: inline-flex;
     align-items: center;
@@ -4822,7 +5170,7 @@ td {
     white-space: nowrap;
 }
 
-/* ========== RESPONSIVE ========== */
+/* == RESPONSIVE == */
 /* — Responsive: ≤1200px (xl breakpoint) — */
 @media (max-width: 1200px) {
 
@@ -4912,9 +5260,8 @@ td {
         padding: 5px 12px;
     }
 
-    /* No margin-left:auto here — the .ops-toolbar-spacer in the
-             * base rules handles right-alignment on row 1 and lets the
-             * filter group fall LEFT when it wraps to row 2. */
+    /* Intentionally no margin-left:auto — the toolbar spacer in the base
+     * rules handles right-alignment and natural left-fall on wrap. */
     .ops-search-wrap {
         flex: 0 1 200px;
     }
@@ -5079,12 +5426,15 @@ td {
         gap: 4px;
     }
 
-    .ops-group--filters {
-        margin-left: 0;
+    .ops-group--filters-pills {
         width: 100%;
+        flex-wrap: wrap;
     }
 
-    .ops-search-wrap {
+    /* Phone width: each filter input gets its own full-width line. Higher
+     * specificity needed to beat the 1500px 50/50 rule above. */
+    .ops-group--filters-search > .la-filter-wrap,
+    .ops-group--filters-search > .ops-search-wrap {
         flex: 1 1 100%;
     }
 
@@ -5099,7 +5449,8 @@ td {
         height: 28px;
     }
 
-    .ops-btn span {
+    /* Hide button labels on phones; keep counters (filter, danger badges). */
+    .ops-btn span:not(.ops-clear-filter-count):not(.ops-badge):not(.ops-badge-danger) {
         display: none;
     }
 
@@ -5161,7 +5512,7 @@ td {
     }
 }
 
-/* ========== PRINT STYLES ========== */
+/* == PRINT STYLES == */
 @media print {
 
     .app-header,
@@ -5184,8 +5535,8 @@ td {
     }
 }
 
-/* ========== ERROR LOG MODAL — terminal-style surface ========== */
-/* ======== CONSOLE LOG VIEWER OVERLAY ======== */
+/* == CONSOLE LOG VIEWER (CLV) MODAL == */
+/* Terminal-styled overlay used to inspect a single job's console log. */
 .clv-overlay {
     display: none;
     position: fixed;
@@ -5514,34 +5865,79 @@ td {
     flex-shrink: 0;
 }
 
+/*  CLV search input 
+ * Wrap owns the visual (border, background); the input is transparent so
+ * icon + count + nav arrows feel like one integrated control. Browser focus
+ * rings are suppressed because the theme's yellow ring clashes with the
+ * dark modal — we own the focus visual via box-shadow. */
 .clv-search-wrap {
     margin-left: auto;
     display: flex;
     align-items: center;
-    gap: 4px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid #334155;
-    border-radius: 5px;
-    padding: 0 8px;
+    gap: 6px;
+    background: rgba(15, 23, 42, 0.6);            /* deep slate, slightly translucent */
+    border: 1px solid rgba(148, 163, 184, 0.18); /* hairline, barely-there */
+    border-radius: 6px;
+    padding: 3px 10px;
+    transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+.clv-search-wrap:hover {
+    border-color: rgba(148, 163, 184, 0.32);
+    background: rgba(15, 23, 42, 0.8);
 }
 
 .clv-search-wrap:focus-within {
-    border-color: #3B82F6;
+    border-color: rgba(59, 130, 246, 0.55);
+    background: rgba(15, 23, 42, 0.92);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
 }
 
 .clv-search-input {
-    background: transparent;
-    border: none;
-    outline: none;
-    color: #E2E8F0;
-    font-size: 11px;
+    /* Transparent so the wrap owns the visual. Every property is !important
+     * to beat the theme's global input rule that would otherwise repaint the
+     * field white-on-black with a yellow focus ring. */
+    background: transparent !important;
+    border: none !important;
+    outline: none !important;          /* kill UA + theme focus ring */
+    box-shadow: none !important;
+    color: #E2E8F0 !important;
+    font-size: 11.5px;
     font-family: inherit;
     padding: 4px 0;
-    width: 140px;
+    width: 150px;
+    -webkit-text-fill-color: #E2E8F0;
+    caret-color: #60A5FA;              /* cyan-blue caret — terminal-friendly accent */
+}
+
+/* Override the theme's input:focus rule — otherwise this field flashes
+ * white+yellow on focus inside the dark modal. */
+.clv-search-input:focus,
+.clv-search-input:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    color: #E2E8F0 !important;
+    border: none !important;
 }
 
 .clv-search-input::placeholder {
-    color: #475569;
+    color: #64748B;                    /* muted slate, doesn't compete with content */
+    font-style: normal;
+    opacity: 1;                        /* normalize across browsers */
+}
+
+/* Defeat Chrome/Safari autofill repaint — pin colours via inset shadow and
+ * use a 5000s transition to delay the yellow flash indefinitely. */
+.clv-search-input:-webkit-autofill,
+.clv-search-input:-webkit-autofill:hover,
+.clv-search-input:-webkit-autofill:focus,
+.clv-search-input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 1000px #0F172A inset !important;
+    -webkit-text-fill-color: #E2E8F0 !important;
+    caret-color: #60A5FA !important;
+    transition: background-color 5000s ease-in-out 0s;
 }
 
 .clv-search-count {
@@ -5915,7 +6311,7 @@ td {
     height: 1px;
 }
 
-/* ---- Phase 2: Line anchoring ---- */
+/*  Phase 2: Line anchoring  */
 .clv-line-num {
     cursor: pointer;
 }
@@ -5934,7 +6330,7 @@ td {
     font-weight: 700;
 }
 
-/* ---- Phase 2: Error block navigation ---- */
+/*  Phase 2: Error block navigation  */
 .clv-err-nav {
     display: inline-flex;
     align-items: center;
@@ -6039,7 +6435,7 @@ td {
     background: rgba(239, 68, 68, 0.12) !important;
 }
 
-/* ---- Phase 2: Structured Steps view ---- */
+/*  Phase 2: Structured Steps view  */
 .clv-scenario-header {
     display: flex;
     align-items: center;
@@ -6164,7 +6560,7 @@ td {
     color: #F8FAFC;
 }
 
-/* ---- Phase 2: Copy / Download header buttons ---- */
+/*  Phase 2: Copy / Download header buttons  */
 .clv-hdr-btn {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -6189,7 +6585,7 @@ td {
     flex-shrink: 0;
 }
 
-/* ---- Phase 2: Copy toast feedback ---- */
+/*  Phase 2: Copy toast feedback  */
 .clv-copy-toast {
     position: absolute;
     top: 8px;
@@ -6212,7 +6608,7 @@ td {
     transform: translateY(0);
 }
 
-/* ---- Phase 2: Collapsible feature/scenario fold ---- */
+/*  Phase 2: Collapsible feature/scenario fold  */
 .clv-fold-toggle {
     display: inline-flex;
     align-items: center;
@@ -6245,7 +6641,7 @@ td {
     display: none !important;
 }
 
-/* ---- Phase 2: Keyboard hint badge ---- */
+/*  Phase 2: Keyboard hint badge  */
 .clv-kbd-hint {
     font-size: 9px;
     color: #475569;
@@ -6380,7 +6776,7 @@ th[data-resizable] {
     opacity: 0.4;
 }
 
-/* ========== TOOLBAR VIEW-STATE: DISABLED CONTROLS ========== */
+/* == TOOLBAR VIEW-STATE: DISABLED CONTROLS == */
 /* Applied to job-table-specific controls when Failure Report is active */
 .fv-toolbar-disabled {
     opacity: 0.35;
@@ -6407,7 +6803,7 @@ th[data-resizable] {
     transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.25s ease;
 }
 
-/* ========== FAILURE CONSOLIDATION VIEW ========== */
+/* == FAILURE CONSOLIDATION VIEW == */
 .failure-view {
     display: none;
     flex-direction: column;
@@ -6765,15 +7161,16 @@ th[data-resizable] {
     }
 }
 
-/* ========== DEVELOPER DIAGNOSTICS PANEL ========== */
+/* == DEVELOPER DIAGNOSTICS PANEL == */
 .diag-toggle-btn {
     position: relative;
 }
 
 .diag-error-dot {
     position: absolute;
-    top: 2px;
-    right: 2px;
+    /* Inset 4px so the dot clears the theme's 2px black button border. */
+    top: 4px;
+    right: 4px;
     width: 7px;
     height: 7px;
     border-radius: 50%;

@@ -1,68 +1,39 @@
 """Credential plumbing — env-auth resolution + error redaction.
 
-Centralises three concerns that every route handler touches:
-
-1. The sentinel string the frontend sends when the user picked the
-   "authenticate with environment credentials" shortcut.
-2. ``resolve_credentials()`` — substitutes the real env-var values
-   into the request body when the sentinel is present, so downstream
-   code can keep reading ``data["username"]`` / ``data["api_token"]``
-   uniformly regardless of whether credentials came from the browser
-   or from the host environment.
-3. ``safe_err()`` — stringifies an exception with embedded URL
-   credentials redacted, so a Jenkins ``http://user:token@host`` URL
-   accidentally pasted into an exception never leaks to the browser.
-
-A single Jenkins service-account credential is enough to read every
-environment exposed by the Jenkins instance:
-
-  JENKINS_TEST_USERNAME = svc-account@example.com
-  JENKINS_TEST_API_KEY  = <api token>
+Routes call :func:`resolve_credentials` to swap the env-auth sentinel
+for real env-var values, and :func:`safe_err` to strip credentials out
+of any exception string before it reaches the browser.
 """
 
 import os
 import re
 from typing import Final
 
-# Sentinel token the frontend sends in the api_token field when the
-# user chose "authenticate with env credentials".  Six bullet glyphs.
+# Frontend sends this six-bullet sentinel in api_token when the user
+# picks "authenticate with env credentials".
 ENV_AUTH_PLACEHOLDER: Final[str] = "••••••••"
 
-# Env-var names the dashboard reads.  One pair, used across all Jenkins
-# environments — the service account behind it has read access
-# everywhere.
+# One service-account pair covers every Jenkins environment.
 ENV_USERNAME_VAR: Final[str] = "JENKINS_TEST_USERNAME"
 ENV_API_KEY_VAR: Final[str] = "JENKINS_TEST_API_KEY"
 
 
-# Matches any "scheme://user:token@host" segment in an exception string
-# so credentials baked into a URL never leak into a JSON error body.
+# Matches ``scheme://user:token@host`` so credentials baked into a URL
+# can't leak into a JSON error body.
 _CREDS_IN_URL_RE: Final[re.Pattern[str]] = re.compile(r"://[^/@\s]+@")
 
 
 def safe_err(exc: Exception) -> str:
-    """Stringify an exception with embedded credentials redacted.
+    """Stringify an exception with any ``://user:token@`` segment redacted.
 
-    All ``jsonify({"error": str(e)})`` sites route through this helper
-    so that a single seam controls what reaches the browser.
-
-    Args:
-        exc: The exception to stringify.
-
-    Returns:
-        ``str(exc)`` with any ``://user:token@`` substring rewritten to
-        ``://[REDACTED]@``.
+    Every ``jsonify({"error": ...})`` site routes through this helper
+    so a single seam controls what reaches the browser.
     """
     return _CREDS_IN_URL_RE.sub("://[REDACTED]@", str(exc))
 
 
 def env_credentials() -> tuple[str, str]:
-    """Read the env-auth credential pair from ``os.environ``.
-
-    Returns ``("", "")`` when either var is unset or blank.  python-dotenv
-    has already populated ``os.environ`` from ``.env`` by the time this
-    runs (the app factory loads it at import time).
-    """
+    """Return the env-auth ``(username, api_key)`` pair, or ``("", "")`` when unset."""
     return (
         os.environ.get(ENV_USERNAME_VAR, "").strip(),
         os.environ.get(ENV_API_KEY_VAR, "").strip(),
@@ -70,22 +41,11 @@ def env_credentials() -> tuple[str, str]:
 
 
 def resolve_credentials(data: dict) -> dict:
-    """Return a copy of *data* with env credentials substituted.
+    """Return *data* with env credentials substituted in when the sentinel is present.
 
-    When ``data["api_token"]`` matches the env-auth placeholder, this
-    swaps in :data:`ENV_USERNAME_VAR` and :data:`ENV_API_KEY_VAR` from
-    the host environment.  Otherwise *data* is returned unchanged.
-
-    The returned dict is always safe to mutate — when substitution
-    happens we return a shallow copy.
-
-    Args:
-        data: The raw JSON body of a request.
-
-    Returns:
-        A dict with ``username`` / ``api_token`` filled in from env
-        when the placeholder is present and both env vars are set; the
-        original *data* otherwise.
+    When the request body's ``api_token`` matches the env-auth
+    placeholder and both env vars are set, returns a shallow copy with
+    real credentials filled in. Otherwise returns *data* unchanged.
     """
     if data.get("api_token", "") != ENV_AUTH_PLACEHOLDER:
         return data

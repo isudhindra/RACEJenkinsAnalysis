@@ -1,8 +1,7 @@
-// Jenkins Dashboard app module
-
+// app.js — Top-level dashboard wiring: event listeners, single-job refresh, on-demand analysis, full reset.
 'use strict';
 
-// Populate the Jenkins instance dropdown from parsed contexts data provided by the server.
+// Populate the Jenkins instance dropdown from contexts data provided by the server.
 function initializeContexts() {
     if (!appState.contextsData) return;
     const parsed = appState.contextsData;
@@ -18,11 +17,44 @@ function initializeContexts() {
     }
 }
 
-// Attach event listeners for keyboard shortcuts, table actions (expand/refresh/rerun), and checkbox selection.
+// "+N more" inline expand/collapse on log-analysis chip rows.
+// Delegated on document so SSE-inserted rows work without rebinding.
+function _wireOverflowToggle() {
+    document.addEventListener('click', function(e) {
+        const btn = e.target.closest('.rec-chip-overflow[data-action="toggle-overflow"]');
+        if (!btn) return;
+        // Don't propagate to row selection.
+        e.stopPropagation();
+        const row = btn.closest('.rec-chip-row');
+        if (!row) return;
+        const expand = !row.classList.contains('is-expanded');
+        row.classList.toggle('is-expanded', expand);
+        btn.setAttribute('aria-expanded', expand ? 'true' : 'false');
+        btn.textContent = expand
+            ? (btn.dataset.countExpanded || '× less')
+            : (btn.dataset.countCollapsed || btn.textContent);
+    });
+}
+
+
+// Wire keyboard shortcuts and table action buttons (expand/refresh/rerun/select).
 function setupEventListeners() {
-    // Escape key prioritization: close overlay, collapse expanded rows, or dismiss toasts.
+    _wireOverflowToggle();
+    // Escape priority: collapse expanded chip groups → close CLV overlay → collapse expanded rows → dismiss toasts.
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
+            const expandedRows = document.querySelectorAll('.rec-chip-row.is-expanded');
+            if (expandedRows.length > 0) {
+                expandedRows.forEach(row => {
+                    row.classList.remove('is-expanded');
+                    const btn = row.querySelector('.rec-chip-overflow[data-action="toggle-overflow"]');
+                    if (btn) {
+                        btn.setAttribute('aria-expanded', 'false');
+                        if (btn.dataset.countCollapsed) btn.textContent = btn.dataset.countCollapsed;
+                    }
+                });
+                return;
+            }
             const overlay = $id('clv-overlay');
             if (overlay && overlay.classList.contains('active')) {
                 clvClose();
@@ -36,7 +68,7 @@ function setupEventListeners() {
         }
     });
 
-    // Event delegation on table body for action buttons (expand, logs, rerun, refresh) and checkboxes.
+    // Delegate row-action clicks (expand, logs, rerun, refresh) and checkbox changes on tbody.
     const tbody = document.querySelector('#job-table tbody');
     if (tbody) {
         tbody.addEventListener('click', function(e) {
@@ -80,9 +112,7 @@ function setupEventListeners() {
 }
 
 
-// STALE ROW DETECTION — periodically check if job data is old and mark rows as stale.
-
-// Start a background interval to check all rows for staleness every 30 seconds.
+// Stale-row detection — flag rows whose data is older than 15 minutes.
 function startStaleRowDetection() {
     staleCheckInterval = setInterval(() => {
         document.querySelectorAll('tbody tr[data-job-id]').forEach(row => {
@@ -92,7 +122,6 @@ function startStaleRowDetection() {
     }, 30000);
 }
 
-// Mark a row as stale if its job data hasn't been refreshed within the last 15 minutes.
 function checkStaleRow(row, jobId) {
     const lastRefresh = appState.lastRefreshTimes.get(jobId);
     if (!lastRefresh) return;
@@ -107,12 +136,9 @@ function checkStaleRow(row, jobId) {
     }
 }
 
-// ROW-LEVEL SINGLE-JOB REFRESH — update one job's row in place without touching the rest of the table.
-// This preserves filters, sort, selections, and expanded rows while fetching fresh data from the API.
-
+// Single-job refresh: update one row in place while preserving filters/sort/selection/scroll/expanded state.
 const _refreshingJobs = new Set();
 
-// Fetch and update a single job without affecting other table state (filters, sort, scroll, selections).
 async function refreshSingleJob(jobId) {
     if (_refreshingJobs.has(jobId)) {
         showToast('Refresh already in progress for this job', 'info');
@@ -124,11 +150,10 @@ async function refreshSingleJob(jobId) {
 
     _refreshingJobs.add(jobId);
 
-    // Find the row and put it in a refreshing state
     const row = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}"]`);
     if (row) {
         row.classList.add('row-refreshing');
-        // Disable the refresh icon within this row to prevent double-clicks
+        // Disable the refresh icon to prevent double-clicks while in flight.
         const refreshIcon = row.querySelector('[data-action="refresh"]');
         if (refreshIcon) refreshIcon.style.pointerEvents = 'none';
     }
@@ -157,13 +182,14 @@ async function refreshSingleJob(jobId) {
 
         const data = await resp.json();
 
-        // Guard: if dashboard was reset during the async call, don't create orphaned state
+        // Guard: drop the result if the dashboard was reset mid-flight (avoid orphaned state).
         if (appState.jobs.size === 0 && !appState.jobs.has(jobId)) {
             showToast('Dashboard was reset during refresh — discarding stale result', 'info');
             return;
         }
+        // Merge incoming fields into the existing job record — wholesale replace
+        // would strip name/url and silently break search (regression #226).
         const job = appState.jobs.get(jobId) || {};
-        // Core fields from refresh response
         if (data.current_status !== undefined) job.latest_status = data.current_status;
         if (data.health_state !== undefined) job.health_state = data.health_state;
         if (data.is_running !== undefined) job.is_running = data.is_running;
@@ -171,23 +197,17 @@ async function refreshSingleJob(jobId) {
         if (data.last_execution_time !== undefined) job.last_execution_time = data.last_execution_time;
         if (data.last_build_number !== undefined) job.last_build_number = data.last_build_number;
 
-        // Enrichment data (shared with handleJobEnriched)
         mergeEnrichmentFields(job, data);
         if (data.console_log_url) job.console_log_url = data.console_log_url;
 
         appState.jobs.set(jobId, job);
         appState.lastRefreshTimes.set(jobId, new Date());
 
-        // Track status transition for visual feedback
         if (appState.statusTransitions) {
-            const prevStatus = appState.statusTransitions.get(jobId);
-            if (prevStatus && prevStatus !== job.latest_status) {
-                // Status changed — the row-just-enriched animation will fire
-            }
             appState.statusTransitions.set(jobId, job.latest_status);
         }
 
-        // Update ONLY this row in the DOM
+        // Update only this row in the DOM.
         if (row) {
             row.classList.remove('row-refreshing');
             row.classList.add('row-just-enriched');
@@ -195,7 +215,6 @@ async function refreshSingleJob(jobId) {
         }
         updateJobRow(jobId, job);
 
-        // Re-render expanded detail row if open
         if (appState.expandedRows.has(jobId)) {
             const detailRow = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}_detail"]`);
             if (detailRow) detailRow.replaceWith(renderExpandedDetail(job));
@@ -210,7 +229,7 @@ async function refreshSingleJob(jobId) {
         if (row) row.classList.remove('row-refreshing');
     } finally {
         _refreshingJobs.delete(jobId);
-        // Re-query row in case DOM was replaced during async refresh (F9)
+        // Re-query the row in case the DOM was replaced during the async call.
         const currentRow = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}"]`);
         if (currentRow) {
             currentRow.classList.remove('row-refreshing');
@@ -220,8 +239,7 @@ async function refreshSingleJob(jobId) {
     }
 }
 
-// ON-DEMAND ANALYSIS — request AI/heuristic analysis of a job's failure or logs.
-// Sends the job to the backend, receives classification, and updates the UI.
+// Request on-demand classification of a single job's logs and refresh its row.
 async function requestOnDemandAnalysis(jobId, jobName) {
     const creds = ensureCredentials('Credentials required for on-demand analysis');
     if (!creds) return;
@@ -247,13 +265,11 @@ async function requestOnDemandAnalysis(jobId, jobName) {
             return;
         }
 
-        // Update job in state
         const job = appState.jobs.get(jobId);
         if (job && data.classification) {
             job.classification = data.classification;
             updateJobRow(jobId, job);
 
-            // Re-render expanded detail if open
             if (appState.expandedRows.has(jobId)) {
                 const detailRow = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}_detail"]`);
                 if (detailRow) {
@@ -270,25 +286,66 @@ async function requestOnDemandAnalysis(jobId, jobName) {
     }
 }
 
-// CLEAR FILTERS — reset all filter inputs and reapply the empty filter set.
+// Reset every filter input and row selection in one shot, then re-apply filters.
+// Each branch is wrapped defensively — a single failure (e.g. LA wrap not in DOM
+// after a view-mode switch) must not silently abort the remaining resets.
 function clearAllFilters() {
-    document.getElementById('filter-status').value = '';
-    document.getElementById('filter-search').value = '';
-    var releaseSel = document.getElementById('filter-release-status');
-    if (releaseSel) releaseSel.value = '';
-    clearLogAnalysisFilter();
-    appState.filters = {
-        status: null,
-        searchText: '',
-        logAnalysisLabels: [],
-        releaseStatus: null
-    };
-    applyFilters();
+    try {
+        const sel = document.getElementById('filter-status');
+        if (sel) { sel.value = ''; sel.selectedIndex = 0; }
+    } catch (_) { /* keep going */ }
+
+    try {
+        const inp = document.getElementById('filter-search');
+        if (inp) inp.value = '';
+    } catch (_) { /* keep going */ }
+
+    // Release-status dropdown is hidden unless promotion is active; still reset it
+    // so a later promotion-enable doesn't surface a stale value.
+    try {
+        const releaseSel = document.getElementById('filter-release-status');
+        if (releaseSel) { releaseSel.value = ''; releaseSel.selectedIndex = 0; }
+    } catch (_) { /* keep going */ }
+
+    try {
+        if (typeof clearLogAnalysisFilter === 'function') clearLogAnalysisFilter();
+    } catch (_) { /* keep going */ }
+
+    // Row selection counts as "something to clear". Inlined so we don't fire
+    // selectByCategory's "Selection cleared" toast on top of a quiet filter reset.
+    try {
+        if (window.appState && appState.selectedJobs && appState.selectedJobs.size > 0) {
+            appState.selectedJobs.clear();
+            document.querySelectorAll(
+                'tbody tr[data-job-id]:not(.detail-row) input[type="checkbox"][data-action="select"]'
+            ).forEach(cb => { cb.checked = false; });
+            document.querySelectorAll('tbody tr.row-selected').forEach(r => {
+                r.classList.remove('row-selected');
+            });
+            const allCb = document.getElementById('select-all-checkbox');
+            if (allCb) { allCb.checked = false; allCb.indeterminate = false; }
+        }
+    } catch (_) { /* keep going */ }
+
+    // Reset in-memory filter state so matchesFilters() sees an empty set
+    // even before _applyFiltersImpl re-reads the DOM inputs.
+    if (window.appState) {
+        appState.filters = {
+            status: null,
+            searchText: '',
+            logAnalysisLabels: [],
+            releaseStatus: null,
+            _searchRe: null,
+        };
+    }
+
+    // Re-read inputs, toggle row visibility, refresh the Clear button's count badge.
+    if (typeof applyFilters === 'function') applyFilters();
 }
 
-// Full dashboard reset called before Fetch Jobs or Full Refresh to start with a clean slate.
+// Full reset called before Fetch Jobs or Full Refresh — starts with a clean slate.
 function resetDashboardState() {
-    // Abort any in-flight fetch so stale SSE events cannot arrive
+    // Abort any in-flight fetch so stale SSE events can't reach a wiped table.
     if (appState._fetchAbortController) {
         appState._fetchAbortController.abort();
         appState._fetchAbortController = null;
@@ -296,23 +353,21 @@ function resetDashboardState() {
     appState.activeOperationId = null;
     appState._fetchErrorCount = 0;
 
-    // Reset progressive row-batch buffer
     resetRowBatch();
-
-    // Reset the motion narrative strip back to idle
     motionReset();
 
-    // Clear the core data store
     appState.jobs.clear();
     appState.statusTransitions.clear();
     appState.rerunStates.clear();
     appState.lastRefreshTimes.clear();
+    // Drop cached row references — the tbody wipe below detaches all elements,
+    // so stale Map entries would point at detached nodes.
+    if (appState.rowEls) appState.rowEls.clear();
+    if (appState.detailRowEls) appState.detailRowEls.clear();
 
-    // Wipe all table body rows (complete DOM teardown)
     const tbody = document.querySelector('#job-table tbody');
     if (tbody) tbody.innerHTML = '';
 
-    // Reset filter dropdowns and search input
     var filterStatus = document.getElementById('filter-status');
     if (filterStatus) filterStatus.value = '';
     var filterSearch = document.getElementById('filter-search');
@@ -320,30 +375,26 @@ function resetDashboardState() {
     var filterRelease = document.getElementById('filter-release-status');
     if (filterRelease) filterRelease.value = '';
     appState.filters = { status: null, searchText: '', logAnalysisLabels: [], releaseStatus: null };
-    // Clear log analysis autocomplete filter if active
     if (typeof clearLogAnalysisFilter === 'function') clearLogAnalysisFilter();
 
-    // Clear sort state and column header indicators
     currentSortKey = null;
     currentSortDir = null;
     syncSortHeaders();
 
-    // Clear row selections and uncheck all checkboxes
     appState.selectedJobs.clear();
     var allCheckbox = document.getElementById('select-all-checkbox');
     if (allCheckbox) allCheckbox.checked = false;
 
-    // Clear expanded detail rows (DOM already wiped above)
     appState.expandedRows.clear();
 
-    // Clear promotion/release validation datetime and downstream state
+    // Drop promotion/release validation state.
     var promoInput = document.getElementById('promotion-datetime');
     if (promoInput) promoInput.value = '';
     appState.promotionTime = null;
     if (typeof clearValidationCache === 'function') clearValidationCache();
     applyPromotionTime();
 
-    // Cancel pending debounce/RAF timers
+    // Cancel pending debounce/RAF timers so they don't fire against the wiped state.
     if (_searchDebounce) {
         clearTimeout(_searchDebounce);
         _searchDebounce = null;
@@ -353,13 +404,11 @@ function resetDashboardState() {
         _filterSortRaf = null;
     }
 
-    // Rebuild log analysis label cache (now empty)
     if (typeof rebuildLogAnalysisLabelCache === 'function') rebuildLogAnalysisLabelCache();
 
-    // Zero-out KPI counters and percentages to prevent stale animated values from lingering
+    // Zero KPI counters so stale animated values don't linger.
     resetAllKPIDisplays();
 
-    // Dismiss failure consolidation view if open
     if (_failureViewActive) {
         _failureViewActive = false;
         const fv = document.getElementById('failure-view');
@@ -372,17 +421,14 @@ function resetDashboardState() {
         if (fvTbody) fvTbody.innerHTML = '';
     }
 
-    // Close console log viewer if open
     if (typeof clvClose === 'function') {
         const clvOverlay = document.getElementById('clv-overlay');
         if (clvOverlay && clvOverlay.classList.contains('active')) clvClose();
     }
 
-    // Hide no-results state
     const noResults = $id('no-results-state');
     if (noResults) noResults.classList.add('hidden');
 
-    // Update derived UI to reflect empty state
     updateToolbarActions();
     updateSummaryBar();
     updateEmptyState();

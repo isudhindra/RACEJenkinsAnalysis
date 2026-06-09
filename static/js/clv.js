@@ -1,34 +1,32 @@
-// Console Log Viewer (CLV) — Interactive log viewer for Jenkins builds with filtering, search, and error navigation
-// Extracted from dashboard.html for maintainability as part of the phased JS extraction refactor
+// Console Log Viewer — interactive log viewer with filtering, search,
+// error navigation, and chunked rendering for very large logs.
 
 'use strict';
 
-// Global state object for the console log viewer, tracking raw lines, filtering, search, and DOM virtualization
+// Single state object shared across the CLV pipeline.
 const clvState = {
-    rawLines: [],           // Full array of { text, cls, lineNum }
-    filteredIndices: [],     // Indices into rawLines matching current filter
-    renderedUpTo: 0,        // How many filteredIndices have been rendered
-    chunkSize: 120,         // Lines per render chunk
+    rawLines: [],           // [{ text, cls, lineNum }]
+    filteredIndices: [],    // indices into rawLines matching the current filter
+    renderedUpTo: 0,        // how many filteredIndices have been rendered
+    chunkSize: 120,
     activeFilter: 'all',
     searchTerm: '',
-    searchMatches: [],      // Indices into filteredIndices that contain search term
+    searchMatches: [],      // filteredIndices entries that contain the search term
     searchCursor: -1,
     observer: null,
     stats: { errors: 0, warnings: 0, info: 0, lines: 0, scenarios: 0, failedScenarios: 0 },
-    errorIndices: [],       // All rawLine indices classified as 'error'
-    errorBlocks: [],        // Grouped error blocks: [{ startIdx, endIdx, anchorIdx }]
-    errorBlockCursor: -1,   // Current block position (-1 = not started)
-    parsedScenarios: [],    // Structured scenario data for Steps view
-    // Two-phase loading state
+    errorIndices: [],
+    errorBlocks: [],        // [{ startIdx, endIdx, anchorIdx }]
+    errorBlockCursor: -1,
+    parsedScenarios: [],
     phase: 'idle',          // 'idle' | 'loading' | 'ready'
-    abortController: null,  // AbortController for in-flight fetch
-    cachedSource: false,    // Was this log served from server cache?
-    // DOM virtualization
-    domWindowStart: 0,      // First filteredIndices position in DOM
-    domWindowSize: 600,     // Max lines to keep in DOM at once
+    abortController: null,
+    cachedSource: false,
+    domWindowStart: 0,      // first filteredIndices position kept in the DOM
+    domWindowSize: 600,     // max lines to keep in DOM (virtualisation cap)
 };
 
-// Open console log modal for a given job, fetch the log, and begin rendering
+// Open the CLV modal for a job, fetch its console log, and begin rendering.
 function clvOpen(jobId) {
     const job = appState.jobs.get(jobId);
     if (!job) {
@@ -37,7 +35,7 @@ function clvOpen(jobId) {
         return;
     }
 
-    // Abort any in-flight fetch from a previous open
+    // Abort any in-flight fetch from a previous open.
     if (clvState.abortController) {
         clvState.abortController.abort();
         clvState.abortController = null;
@@ -47,7 +45,7 @@ function clvOpen(jobId) {
     const ref = job.analysis_reference;
     const useRef = isRunning && ref && ['FAILURE','UNSTABLE','ABORTED'].includes(ref.status);
 
-    // Determine build context — safely handle missing three_run_context
+    // For running jobs we view the previous completed build instead of the live one.
     let buildNum, buildStatus, sourceLabel;
     const trc = job.three_run_context || {};
     if (useRef) {
@@ -62,7 +60,7 @@ function clvOpen(jobId) {
         sourceLabel = '';
     }
 
-    // Resolve job URL — handle both frontend property names
+    // Tolerate either property name from upstream code paths.
     const jobUrl = job.url || job.job_url || job.job_id || jobId;
     if (!jobUrl) {
         console.warn('[CLV] clvOpen: no job URL found for:', job.name || jobId);
@@ -71,14 +69,12 @@ function clvOpen(jobId) {
         return;
     }
 
-    // Guard: build number must be resolvable
     if (buildNum === '?') {
         console.warn('[CLV] clvOpen: no build number available for:', jobUrl);
         diagLog('warning', 'CLV', 'No build number available', { raw: jobUrl });
-        // Still allow opening — the fetch will handle the error gracefully
+        // Still allow opening — the fetch surfaces the error gracefully.
     }
 
-    // Populate header — defensive null checks on all DOM elements
     var el;
     el = document.getElementById('clv-job-name');
     if (el) el.textContent = job.name || job.job_name || 'Unknown Job';
@@ -89,7 +85,6 @@ function clvOpen(jobId) {
     el = document.getElementById('clv-source-ctx');
     if (el) el.textContent = sourceLabel;
 
-    // Status dot color
     const dot = document.getElementById('clv-dot');
     if (dot) {
         dot.className = 'clv-title-dot';
@@ -99,7 +94,7 @@ function clvOpen(jobId) {
         else dot.classList.add('clv-title-dot--aborted');
     }
 
-    // Reset state
+    // Reset state for a fresh load.
     clvState.rawLines = [];
     clvState.filteredIndices = [];
     clvState.renderedUpTo = 0;
@@ -116,7 +111,7 @@ function clvOpen(jobId) {
     clvState.cachedSource = false;
     clvState.domWindowStart = 0;
 
-    // Reset UI — loading phase (all with null guards)
+    // Reset UI to the loading phase.
     el = document.getElementById('clv-log-container');
     if (el) el.innerHTML = '';
     el = document.getElementById('clv-loading');
@@ -137,28 +132,27 @@ function clvOpen(jobId) {
         b.classList.toggle('active', b.dataset.clvFilter === 'all');
     });
 
-    // Gate toolbar + summary during loading phase
+    // Gate toolbar + summary while loading.
     el = document.getElementById('clv-toolbar');
     if (el) { el.classList.add('clv-toolbar--gated'); el.classList.remove('clv-toolbar--ready'); }
     el = document.getElementById('clv-summary');
     if (el) { el.classList.add('clv-summary--gated'); el.classList.remove('clv-summary--ready'); }
 
-    // Reset panel to default size
     const panel = document.getElementById('clv-panel');
     if (panel) { panel.style.removeProperty('--clv-w'); panel.style.removeProperty('--clv-h'); }
-    // Set keyboard hint for platform
     const kbdHint = document.getElementById('clv-kbd-hint');
     if (kbdHint) kbdHint.textContent = navigator.platform.indexOf('Mac') > -1 ? '⌘F' : 'Ctrl+F';
 
-    // Show overlay
     el = document.getElementById('clv-overlay');
-    if (el) el.classList.add('active');
+    if (el) {
+        el.classList.add('active');
+        el.setAttribute('aria-hidden', 'false');
+    }
 
-    // Fetch console log (two-phase)
     clvFetch(jobUrl, buildNum);
 }
 
-// Fetch console log from backend API, handles both streaming (SSE) and full text responses
+// Fetch the console log. Handles both cached text/plain streams and SSE-with-progress.
 async function clvFetch(jobUrl, buildNum) {
     const controller = new AbortController();
     clvState.abortController = controller;
@@ -180,7 +174,6 @@ async function clvFetch(jobUrl, buildNum) {
         });
 
         if (!resp.ok) {
-            // Try to extract error detail from JSON response body
             let errMsg = 'HTTP ' + resp.status;
             try {
                 const ct = resp.headers.get('Content-Type') || '';
@@ -188,7 +181,7 @@ async function clvFetch(jobUrl, buildNum) {
                     const errBody = await resp.json();
                     if (errBody && errBody.error) errMsg = errBody.error;
                 }
-            } catch (_) { } // keep default errMsg
+            } catch (_) { /* keep HTTP code as the message */ }
             throw new Error(errMsg);
         }
 
@@ -214,9 +207,8 @@ async function clvFetch(jobUrl, buildNum) {
                 if (done) break;
 
                 buffer += decoder.decode(value, { stream: true });
-                // Split into complete lines; keep the last partial chunk
                 const lines = buffer.split('\n');
-                buffer = lines.pop();
+                buffer = lines.pop();   // keep partial last line for next chunk
 
                 for (const line of lines) {
                     if (line.length > 0 || clvState.rawLines.length > 0) {
@@ -224,18 +216,18 @@ async function clvFetch(jobUrl, buildNum) {
                     }
                     processed++;
                     sinceYield++;
+                    // Yield to the browser every BATCH_LINES so the page stays responsive.
                     if (sinceYield >= BATCH_LINES) {
                         sinceYield = 0;
                         if (loadMsg) loadMsg.textContent = 'Processing ' + processed.toLocaleString() + ' lines...';
                         if (loadDetail) loadDetail.textContent = processed.toLocaleString() + ' lines';
-                        // Yield control to the browser
                         await new Promise(r => setTimeout(r, 0));
                         if (controller.signal.aborted) return;
                     }
                 }
             }
 
-            // Flush trailing partial line + any buffered decoder bytes
+            // Flush trailing partial line + any bytes buffered in the decoder.
             buffer += decoder.decode();
             if (buffer.length > 0) {
                 clvProcessLine(buffer);
@@ -243,12 +235,12 @@ async function clvFetch(jobUrl, buildNum) {
             }
 
             if (loadMsg) loadMsg.textContent = 'Finalising ' + processed.toLocaleString() + ' lines...';
-            // One more yield so the message paints before clvActivateAnalysis
+            // One more yield so the message paints before analysis kicks off.
             await new Promise(r => setTimeout(r, 0));
             if (controller.signal.aborted) return;
             clvActivateAnalysis();
         } else {
-            // ── SSE stream with progress events ──
+            // SSE stream with periodic progress events.
             var progEl = document.getElementById('clv-loading-progress');
             if (progEl) progEl.style.display = 'block';
             var msgEl = document.getElementById('clv-loading-msg');
@@ -264,13 +256,11 @@ async function clvFetch(jobUrl, buildNum) {
 
                 buffer += decoder.decode(value, { stream: true });
 
-                // Parse SSE events from buffer
                 let boundary;
                 while ((boundary = buffer.indexOf('\n\n')) !== -1) {
                     const raw = buffer.slice(0, boundary);
                     buffer = buffer.slice(boundary + 2);
 
-                    // Parse "data: {...}" format
                     const match = raw.match(/^data:\s*(.+)$/m);
                     if (!match) continue;
 
@@ -280,27 +270,25 @@ async function clvFetch(jobUrl, buildNum) {
                     if (evt.type === 'line') {
                         clvProcessLine(evt.text != null ? evt.text : '');
                     } else if (evt.type === 'progress') {
-                        // Update progress UI
                         var bar = document.getElementById('clv-loading-bar');
                         if (bar) bar.style.width = (evt.pct || 0) + '%';
                         var detail = document.getElementById('clv-loading-detail');
                         if (detail) detail.textContent =
                             (evt.loaded || 0).toLocaleString() + ' / ' + (evt.total || 0).toLocaleString() + ' lines (' + (evt.pct || 0) + '%)';
                     } else if (evt.type === 'complete') {
-                        // All lines received — transition to analysis phase
                         clvActivateAnalysis();
                     }
                 }
             }
 
-            // If we never got a 'complete' event (stream ended), activate anyway
+            // Stream ended without an explicit 'complete' — activate anyway.
             if (clvState.phase === 'loading') {
                 clvActivateAnalysis();
             }
         }
 
     } catch (err) {
-        if (err.name === 'AbortError') return; // User closed overlay during fetch
+        if (err.name === 'AbortError') return; // user closed overlay during fetch
         console.error('[CLV] clvFetch error:', err);
         reportFetchError('CLV', 'Console log fetch error', '/api/console-log', err);
         var loadEl = document.getElementById('clv-loading');
@@ -314,15 +302,14 @@ async function clvFetch(jobUrl, buildNum) {
     }
 }
 
-// Transition from loading to ready phase, run full analysis pipeline and enable all features
+// Move from loading → ready: run the analysis pipeline and reveal toolbar + summary.
 function clvActivateAnalysis() {
     clvState.phase = 'ready';
 
-    // Hide loading indicator
     var loadingEl = document.getElementById('clv-loading');
     if (loadingEl) loadingEl.style.display = 'none';
 
-    // Run full analysis pipeline (wrapped in try-catch to prevent overlay from breaking)
+    // Try the analysis pipeline; if it crashes still show the raw log.
     try {
         clvBuildErrorBlocks();
         clvBuildFilteredList();
@@ -332,18 +319,15 @@ function clvActivateAnalysis() {
     } catch (analysisErr) {
         console.error('[CLV] Analysis pipeline error:', analysisErr);
         diagLog('error', 'CLV', 'Analysis pipeline error', { stack: analysisErr.stack, raw: analysisErr.message });
-        // Still show the raw log even if analysis fails
         clvBuildFilteredList();
         try { clvRenderChunk(); } catch (_) {}
     }
 
-    // Un-gate toolbar and summary — reveal with animation
     var toolbar = document.getElementById('clv-toolbar');
     var summary = document.getElementById('clv-summary');
     if (toolbar) { toolbar.classList.remove('clv-toolbar--gated'); toolbar.classList.add('clv-toolbar--ready'); }
     if (summary) { summary.classList.remove('clv-summary--gated'); summary.classList.add('clv-summary--ready'); }
 
-    // Show cache indicator in source context if served from cache
     if (clvState.cachedSource) {
         var srcCtx = document.getElementById('clv-source-ctx');
         if (srcCtx) {
@@ -353,25 +337,26 @@ function clvActivateAnalysis() {
     }
 }
 
-// Pattern registry for classifying log lines — multi-framework, priority-ordered, first match wins
-// Each rule: { id, cls, re, framework? } where cls feeds filters, rendering, and stats
+// Line classifier rules — priority-ordered, first match wins. `cls` feeds
+// filters, rendering, and stats. Covers Cucumber, Jenkins pipeline, Java/JVM,
+// Playwright/Cypress, Node, and generic test runners.
 const CLV_PATTERNS = [
 
-    // ── Cucumber: step markers (unicode) ──────────────────────────
+    //  Cucumber: step markers (unicode) 
     { id: 'cuke-step-pass',    cls: 'step-pass',  re: /^\s*\u2714\s/,                  framework: 'cucumber' },
     { id: 'cuke-step-fail',    cls: 'step-fail',  re: /^\s*\u2718\s/,                  framework: 'cucumber' },
     { id: 'cuke-step-skip',    cls: 'step-skip',  re: /^\s*\u21b7\s/,                  framework: 'cucumber' },
 
-    // ── Cucumber: step markers (legacy text) ──────────────────────
+    //  Cucumber: step markers (legacy text) 
     { id: 'cuke-step-pass-legacy', cls: 'step-pass', re: /\.\.\.\s*PASSED\b/,          framework: 'cucumber' },
     { id: 'cuke-step-fail-legacy', cls: 'step-fail', re: /\.\.\.\s*FAILED\b/,          framework: 'cucumber' },
     { id: 'cuke-step-skip-legacy', cls: 'step-skip', re: /\.\.\.\s*SKIPPED\b/,         framework: 'cucumber' },
 
-    // ── Cucumber: scenario / feature headers ──────────────────────
+    //  Cucumber: scenario / feature headers 
     { id: 'cuke-scenario',     cls: 'scenario',   re: /^(?:\s*|\S.*?\]\s*)Scenario(?:\s+Outline)?:/,  framework: 'cucumber' },
     { id: 'cuke-feature',      cls: 'feature',    re: /(?:^\s*|\[INFO\]\s*)Feature:/,  framework: 'cucumber' },
 
-    // ── Java / JVM log-level markers ──────────────────────────────
+    //  Java / JVM log-level markers 
     { id: 'java-error',        cls: 'error',      re: /\[ERROR\]|\[FATAL\]|\[SEVERE\]/, framework: 'java' },
     { id: 'java-stacktrace',   cls: 'stacktrace', re: /^\s+\t?at\s/,                   framework: 'java' },
     { id: 'cuke-stackref',     cls: 'stacktrace', re: /^\s+\u273d\./,                  framework: 'cucumber' },
@@ -379,29 +364,27 @@ const CLV_PATTERNS = [
     { id: 'java-exception',    cls: 'error',      re: /^\s+(java\.|org\.|com\.|net\.)[\w.]+Exception/, framework: 'java' },
     { id: 'java-error-cls',    cls: 'error',      re: /^\s+(java\.|org\.|com\.|net\.)[\w.]+Error/,     framework: 'java' },
 
-    // ── Java / JVM log-level info & warn ──────────────────────────
+    //  Java / JVM log-level info & warn 
     { id: 'java-warn',         cls: 'warn',       re: /\[WARN\]/,                      framework: 'java' },
     { id: 'java-info',         cls: 'info',       re: /\[INFO\]/,                      framework: 'java' },
 
-    // ── Cucumber: Given/When/Then keywords ────────────────────────
+    //  Cucumber: Given/When/Then keywords 
     { id: 'cuke-keyword',      cls: 'step',       re: /(?:^\s*|\]\s*)(Given|When|Then|And|But)\b/, framework: 'cucumber' },
 
-    // ── Jenkins pipeline (stage-specific rules MUST precede generic [Pipeline]) ─
+    //  Jenkins pipeline (stage-specific rules MUST precede generic [Pipeline]) ─
     { id: 'jenkins-stage',     cls: 'stage',      re: /^\[Pipeline\]\s*\{\s*\(.*\)$/,  framework: 'jenkins' },
     { id: 'jenkins-stage-alt', cls: 'stage',      re: /^Stage\s+"[^"]+"\s*(started|skipped)/i, framework: 'jenkins' },
     { id: 'jenkins-pipeline',  cls: 'pipeline',   re: /^\[Pipeline\]/,                 framework: 'jenkins' },
 
-    // ── Current summary patterns ──────────────────────────────────
+    //  Current summary patterns 
     { id: 'summary-results',   cls: 'summary',    re: /TEST RESULTS SUMMARY|FAILED SCENARIOS/, framework: 'generic' },
     { id: 'summary-finished',  cls: 'summary',    re: /^Finished:/,                    framework: 'jenkins' },
     { id: 'summary-banner',    cls: 'summary',    re: /^\s*[|_]{2,}/,                  framework: 'generic' },
     { id: 'summary-tests',     cls: 'summary',    re: /T E S T S/,                     framework: 'generic' },
 
-    // ====================================================================
     //  Cross-framework patterns (additive, lower priority)
-    // ====================================================================
 
-    // ── Playwright / JS test-runner errors ────────────────────────
+    //  Playwright / JS test-runner errors 
     { id: 'pw-timeout',        cls: 'error',      re: /TimeoutError:|Timed?\s*out\b.*\d+ms/i,         framework: 'playwright' },
     { id: 'pw-locator',        cls: 'error',      re: /locator\s+(resolved|not\s+found|not\s+visible)/i, framework: 'playwright' },
     { id: 'pw-expect-fail',    cls: 'error',      re: /expect\(.*\)\.(toBe|toEqual|toHave|toContain|toMatch)\b/i, framework: 'playwright' },
@@ -409,25 +392,25 @@ const CLV_PATTERNS = [
     { id: 'pw-strict-mode',    cls: 'error',      re: /strict mode violation/i,        framework: 'playwright' },
     { id: 'pw-test-header',    cls: 'test-block',  re: /^\s*[✓✗✘×·]\s+.+\(\d+(\.\d+)?m?s\)\s*$/,    framework: 'playwright' },
 
-    // ── Cypress errors ────────────────────────────────────────────
+    //  Cypress errors 
     { id: 'cy-assert-fail',    cls: 'error',      re: /CypressError:|AssertionError:/,  framework: 'cypress' },
     { id: 'cy-cmd-fail',       cls: 'error',      re: /cy\.\w+\(\)\s*failed/i,        framework: 'cypress' },
     { id: 'cy-element-err',    cls: 'error',      re: /element\s+not\s+(found|visible|interactable)/i, framework: 'cypress' },
     { id: 'cy-spec-header',    cls: 'test-block',  re: /^\s*(Running|Spec|Suite):/i,   framework: 'cypress' },
     { id: 'cy-passing-fail',   cls: 'result-summary', re: /^\s*\d+\s+(passing|failing|pending)\b/i,   framework: 'cypress' },
 
-    // ── Node / JS stack traces ────────────────────────────────────
+    //  Node / JS stack traces 
     { id: 'node-stack',        cls: 'stacktrace', re: /^\s+at\s+.*\(.*:\d+:\d+\)/,    framework: 'node' },
     { id: 'node-stack-anon',   cls: 'stacktrace', re: /^\s+at\s+(async\s+)?[\w.<>]+\s+\(/, framework: 'node' },
     { id: 'node-internal',     cls: 'stacktrace', re: /^\s+at\s+(node:|internal\/)/,   framework: 'node' },
 
-    // ── Result / summary lines (must precede generic error catch-alls because result lines often contain "failed") ───
+    //  Result / summary lines (must precede generic error catch-alls because result lines often contain "failed") ─
     { id: 'gen-test-result',   cls: 'result-summary', re: /^\s*Tests?:\s*\d+/i,        framework: 'generic' },
     { id: 'gen-result-count',  cls: 'result-summary', re: /\d+\s+(tests?|specs?|suites?)\s+(passed|failed|skipped)/i, framework: 'generic' },
     { id: 'gen-result-total',  cls: 'result-summary', re: /^(Tests|Suites|Scenarios)\s*:.*\d+\s*(passed|failed)/i,    framework: 'generic' },
     { id: 'gen-build-result',  cls: 'result-summary', re: /^(BUILD|Build)\s+(SUCCESS|FAILURE|UNSTABLE)/i,              framework: 'generic' },
 
-    // ── Generic error keywords (broad catch) ──────────────────────
+    //  Generic error keywords (broad catch) 
     { id: 'gen-error-prefix',  cls: 'error',      re: /^ERROR\b|^FATAL\b|^SEVERE\b/,  framework: 'generic' },
     { id: 'gen-build-failure', cls: 'error',      re: /\bBUILD\s+FAILURE\b|<<<\s+FAILURE\b|>>>\s+FAILED\b|\bTESTS?\s+FAILED\b/, framework: 'generic' },
     // Cucumber failure marker — `Test failed at step:` is the canonical
@@ -435,24 +418,25 @@ const CLV_PATTERNS = [
     { id: 'gen-exception',     cls: 'error',      re: /Exception:|Error:|ENOENT|ECONNREFUSED|EACCES/,  framework: 'generic' },
     { id: 'gen-connection',    cls: 'error',      re: /Connection\s+(refused|reset|timed\s*out)/i,     framework: 'generic' },
 
-    // ── Generic warning keywords ──────────────────────────────────
+    //  Generic warning keywords 
     { id: 'gen-warn-prefix',   cls: 'warn',       re: /^WARN\b|^WARNING\b|Warning:/i,  framework: 'generic' },
     { id: 'gen-deprecation',   cls: 'warn',       re: /\bDeprecationWarning\b|\bDeprecated\b/i,       framework: 'generic' },
 
-    // ── Generic info keywords ─────────────────────────────────────
+    //  Generic info keywords ─
     { id: 'gen-info-prefix',   cls: 'info',       re: /^INFO\b/,                       framework: 'generic' },
 
-    // ── Test-block / section headers (Playwright, Jest, Mocha, etc) ─
+    //  Test-block / section headers (Playwright, Jest, Mocha, etc) ─
     { id: 'gen-test-header',   cls: 'test-block', re: /^\s*(Test|Spec|Describe|Context|Suite)\s*:/i,   framework: 'generic' },
     { id: 'gen-test-case',     cls: 'test-block', re: /^\s*(it|test)\s+['"`]/i,        framework: 'generic' },
 
-    // ── Pipeline / stage markers ──────────────────────────────────
+    //  Pipeline / stage markers 
     { id: 'gen-stage-marker',  cls: 'stage',      re: /^\[Stage:\s*[^\]]+\]/i,         framework: 'generic' },
     { id: 'gen-phase-marker',  cls: 'stage',      re: /^={3,}\s*.+\s*={3,}$/,          framework: 'generic' },
     { id: 'gen-step-marker',   cls: 'stage',      re: /^Step\s+\d+\s*(\/\s*\d+)?\s*:/i, framework: 'generic' },
 ];
 
-// Classify a single console-log line by testing it against the pattern registry, first match wins
+// Classify a single console-log line. A leading [LEVEL] prefix wins;
+// otherwise CLV_PATTERNS is checked in order with first-match semantics.
 function clvClassifyLine(text) {
     const prefixMatch = text.slice(0, 80).match(/\[\s*(ERROR|FATAL|SEVERE|WARN(?:ING)?|INFO|DEBUG|TRACE)\s*\]/i);
     if (prefixMatch) {
@@ -461,25 +445,23 @@ function clvClassifyLine(text) {
             return 'error';
         }
         if (level === 'WARN' || level === 'WARNING') return 'warn';
-        // INFO / DEBUG / TRACE — never an error, regardless of body content.
+        // INFO / DEBUG / TRACE — never an error regardless of body content.
         return 'info';
     }
 
-    // No log-level prefix — apply the content patterns.
     for (let i = 0; i < CLV_PATTERNS.length; i++) {
         if (CLV_PATTERNS[i].re.test(text)) return CLV_PATTERNS[i].cls;
     }
     return 'plain';
 }
 
-// Process a single log line: classify it, add to rawLines, update stats, and build scenario/test structure
+// Classify + index a line, then update stats and the scenario/test structure.
 function clvProcessLine(text) {
     if (text == null) text = '';
     const cls = clvClassifyLine(text);
     const idx = clvState.rawLines.length;
     clvState.rawLines.push({ text, cls, lineNum: idx + 1 });
 
-    // Update stats
     if (cls === 'error') {
         clvState.stats.errors++;
         clvState.errorIndices.push(idx);
@@ -490,9 +472,8 @@ function clvProcessLine(text) {
     if (cls === 'step-fail') clvState.stats.failedScenarios++;
     clvState.stats.lines++;
 
-    // ── Build scenario / test-block structure for Steps view ──
+    //  Build the scenario / test-block structure used by the Steps view 
     if (cls === 'scenario') {
-        // Cucumber scenario header
         const name = text.replace(/^.*?Scenario(?:\s+Outline)?:\s*/, '').replace(/\s*#.*$/, '').trim();
         clvState.parsedScenarios.push({
             name: name,
@@ -503,12 +484,11 @@ function clvProcessLine(text) {
             framework: 'cucumber',
         });
     } else if (cls === 'test-block') {
-        // Generic test/spec/suite header from any framework
+        // Generic test/spec/suite header from any framework.
         const name = text.replace(/^\s*[✓✗✘×·]\s*/, '')
                          .replace(/^\s*(Test|Spec|Describe|Context|Suite|Running|it|test)\s*:\s*/i, '')
                          .replace(/\(\d+(\.\d+)?m?s\)\s*$/, '')
                          .replace(/['"`]/g, '').trim() || text.trim();
-        // Detect if the header itself indicates failure
         const isFail = /[✗✘×]|fail/i.test(text);
         clvState.parsedScenarios.push({
             name: name,
@@ -526,20 +506,19 @@ function clvProcessLine(text) {
         if (stepStatus === 'fail') sc.status = 'fail';
     } else if ((cls === 'error' || cls === 'stacktrace') && clvState.parsedScenarios.length > 0) {
         const sc = clvState.parsedScenarios[clvState.parsedScenarios.length - 1];
-        // Associate error with the last failed step in this scenario/block
+        // Attach the error to the last failed step in this scenario/block.
         if (sc.steps.length > 0 && sc.steps[sc.steps.length - 1].status === 'fail') {
             if (!sc.steps[sc.steps.length - 1].error) sc.steps[sc.steps.length - 1].error = [];
             sc.steps[sc.steps.length - 1].error.push(text);
         } else if (sc.framework === 'generic') {
-            // For generic test blocks without explicit steps, attach
-            // errors directly to the block and mark it as failed
+            // Generic blocks have no explicit steps — mark the block failed.
             sc.status = 'fail';
         }
         sc.errorLines.push(idx);
     }
 }
 
-// Build list of filtered indices based on active filter (all, errors, warnings, info, steps)
+// Rebuild filteredIndices from the active filter (all / errors / warnings / info / steps).
 function clvBuildFilteredList() {
     const f = clvState.activeFilter;
     clvState.filteredIndices = [];
@@ -555,7 +534,7 @@ function clvBuildFilteredList() {
     }
 }
 
-// Render next chunk of filtered log lines (120 at a time for lazy loading)
+// Render the next chunk of filtered log lines (chunkSize at a time).
 function clvRenderChunk() {
     const container = document.getElementById('clv-log-container');
     const start = clvState.renderedUpTo;
@@ -572,7 +551,6 @@ function clvRenderChunk() {
         div.className = 'clv-line';
         div.dataset.rawIdx = rawIdx;
 
-        // CSS class for line type
         const clsMap = {
             'error': 'clv-line--error', 'warn': 'clv-line--warn', 'info': 'clv-line--info',
             'step': 'clv-line--step', 'step-pass': 'clv-line--step clv-line--step-pass',
@@ -580,9 +558,9 @@ function clvRenderChunk() {
             'stacktrace': 'clv-line--stacktrace', 'pipeline': 'clv-line--pipeline',
             'scenario': 'clv-line--scenario', 'feature': 'clv-line--feature',
             'summary': 'clv-line--summary',
-            'test-block': 'clv-line--scenario',             // renders like scenario headers
-            'stage': 'clv-line--pipeline',                  // renders like pipeline lines
-            'result-summary': 'clv-line--summary',          // renders like summary lines
+            'test-block': 'clv-line--scenario',     // renders like a scenario header
+            'stage': 'clv-line--pipeline',          // renders like a pipeline line
+            'result-summary': 'clv-line--summary',  // renders like a summary line
         };
         if (clsMap[cls]) div.className += ' ' + clsMap[cls];
 
@@ -596,14 +574,13 @@ function clvRenderChunk() {
         const textSpan = document.createElement('span');
         textSpan.className = 'clv-line-text';
 
-        // Phase 2: Add fold toggle for feature/scenario/test-block lines
+        // Section headers get a fold toggle so the user can collapse the block.
         if (cls === 'feature' || cls === 'scenario' || cls === 'test-block') {
             const foldBtn = document.createElement('span');
             foldBtn.className = 'clv-fold-toggle';
             foldBtn.textContent = '▾';
             foldBtn.addEventListener('click', function(ev) { ev.stopPropagation(); clvToggleFold(rawIdx, foldBtn); });
             textSpan.appendChild(foldBtn);
-            // Linkify URLs in the text portion after the fold toggle
             const textNode = document.createElement('span');
             textNode.innerHTML = clvLinkifyHtml(escapeHtml(text));
             textSpan.appendChild(textNode);
@@ -619,11 +596,11 @@ function clvRenderChunk() {
     container.appendChild(fragment);
     clvState.renderedUpTo = end;
 
-    // Re-apply search highlighting if active
     if (clvState.searchTerm) clvHighlightSearch();
 }
 
-// Setup intersection observer to trigger progressive rendering when user scrolls near end of log
+// IntersectionObserver-driven progressive rendering: render the next chunk
+// when the sentinel scrolls into view.
 function clvSetupObserver() {
     if (clvState.observer) clvState.observer.disconnect();
 
@@ -639,17 +616,14 @@ function clvSetupObserver() {
 
     clvState.observer.observe(sentinel);
 
-    // Scroll-based DOM recycling for large logs
     body.removeEventListener('scroll', clvOnBodyScroll);
     body.addEventListener('scroll', clvOnBodyScroll, { passive: true });
 }
 
-// Debounce timer for DOM recycling during scroll
 let _clvRecycleTimer = null;
 
-// Debounced scroll handler to avoid thrashing during fast scrolling
+// Debounce scroll-driven DOM recycling so fast scrolls don't thrash.
 function clvOnBodyScroll() {
-    // Debounce recycling to avoid thrashing during fast scroll
     if (_clvRecycleTimer) return;
     _clvRecycleTimer = setTimeout(() => {
         _clvRecycleTimer = null;
@@ -657,12 +631,9 @@ function clvOnBodyScroll() {
     }, 150);
 }
 
-// Remove DOM lines far outside viewport to keep memory usage low on
-// large logs.  Two passes (top / bottom) collect the doomed nodes into
-// an array first, then remove them in a single batch — without this,
-// each remove() inside the while-loop forces a layout recalculation,
-// and a fast scroll on a 50k-line log triggers hundreds of reflows in
-// the 150ms recycle window.
+// Drop DOM lines that are far outside the viewport to cap memory on huge logs.
+// Two-pass: collect candidates first, then remove in a batch — interleaving
+// getBoundingClientRect() and remove() would force a reflow per row.
 function clvRecycleDom() {
     const container = document.getElementById('clv-log-container');
     const body = document.getElementById('clv-body');
@@ -670,14 +641,13 @@ function clvRecycleDom() {
 
     const children = container.children;
     const overflow = children.length - clvState.domWindowSize;
-    if (overflow < clvState.domWindowSize * 0.2) return; // Not enough to bother
+    if (overflow < clvState.domWindowSize * 0.2) return;   // not enough to bother
 
     const bodyRect = body.getBoundingClientRect();
-    const buffer = bodyRect.height * 2; // Keep 2 viewport heights above and below
+    const buffer = bodyRect.height * 2;   // keep 2 viewport heights above/below
 
-    // Read pass — collect refs to remove, no DOM mutation yet so the
-    // layout that getBoundingClientRect() reads stays consistent across
-    // every measurement in this batch.
+    // Read pass — collect references; no DOM mutation yet so the layout
+    // that getBoundingClientRect() reads stays consistent in this batch.
     const toRemove = [];
     let i = 0;
     while (i < overflow && i < children.length) {
@@ -704,13 +674,11 @@ function clvRecycleDom() {
         }
     }
 
-    // Write pass — batch the removals.  Each .remove() still incurs the
-    // browser's tree-mutation work, but no getBoundingClientRect() in
-    // between means no forced reflow per removal.
+    // Write pass — batch removals so no forced reflow happens per removal.
     for (const node of toRemove) node.remove();
 }
 
-// Update stats display (line counts, error counts, scenario counts)
+// Repaint the stats footer (line / error / warning / scenario counts).
 function clvUpdateStats() {
     const s = clvState.stats;
     document.getElementById('clv-total-lines').textContent = s.lines.toLocaleString();
@@ -732,7 +700,6 @@ function clvUpdateStats() {
         fscStat.style.display = 'none';
     }
 
-    // Show/hide error navigation
     const errNav = document.getElementById('clv-err-nav');
     if (errNav) {
         errNav.style.display = clvState.errorIndices.length > 0 ? '' : 'none';
@@ -740,9 +707,9 @@ function clvUpdateStats() {
     }
 }
 
-// Group consecutive error/stacktrace lines into logical blocks for block-based error navigation
+// Group consecutive error/stacktrace/step-fail lines into navigable blocks,
+// allowing small gaps for blank lines / context. Anchor = first true 'error' line.
 function clvBuildErrorBlocks() {
-    // Group consecutive error/stacktrace/step-fail lines into blocks.
     const blocks = [];
     const errorClasses = new Set(['error', 'stacktrace', 'step-fail']);
     let current = null;
@@ -753,14 +720,11 @@ function clvBuildErrorBlocks() {
             if (current === null) {
                 current = { startIdx: i, endIdx: i, anchorIdx: i };
             } else if (i - current.endIdx <= 3) {
-                // Extend block (allow small gaps for blank lines / context)
                 current.endIdx = i;
             } else {
-                // New block
                 blocks.push(current);
                 current = { startIdx: i, endIdx: i, anchorIdx: i };
             }
-            // Set anchor to first 'error' line in block (not stacktrace)
             if (cls === 'error' && clvState.rawLines[current.anchorIdx].cls !== 'error') {
                 current.anchorIdx = i;
             }
@@ -770,7 +734,7 @@ function clvBuildErrorBlocks() {
     clvState.errorBlocks = blocks;
 }
 
-// Update error navigation button states (prev/next/first) based on current cursor position
+// Sync the prev/next/first button states with the current cursor position.
 function clvUpdateErrNavButtons() {
     const total = clvState.errorBlocks.length;
     const cur = clvState.errorBlockCursor;
@@ -783,11 +747,10 @@ function clvUpdateErrNavButtons() {
     if (total === 0) { posEl.textContent = ''; return; }
 
     if (cur === -1) {
-        // Initial state — no block selected yet
+        // Initial state — Next acts as "jump to first" so there are two entry points.
         posEl.textContent = total + ' error ' + (total === 1 ? 'block' : 'blocks');
         firstBtn.disabled = false;
         prevBtn.disabled = true;
-        // Enable Next in initial state so user has two intuitive entry points
         nextBtn.disabled = false;
     } else {
         posEl.textContent = (cur + 1) + ' / ' + total;
@@ -797,9 +760,8 @@ function clvUpdateErrNavButtons() {
     }
 }
 
-// Check if error block's anchor line is visible in the viewport
+// Is this block's anchor line currently visible in the viewport?
 function clvIsBlockVisible(block) {
-    // Check if the anchor line of this block is currently visible in the viewport
     const body = document.getElementById('clv-body');
     const container = document.getElementById('clv-log-container');
     if (!body || !container) return false;
@@ -812,26 +774,24 @@ function clvIsBlockVisible(block) {
     return elRect.top >= bodyRect.top && elRect.bottom <= bodyRect.bottom;
 }
 
-// Ensure a specific filtered index is rendered, re-rendering if DOM recycling removed it
+// Make sure `filterIdxTarget` is currently in the DOM, re-rendering a window
+// around it if recycling has dropped it.
 function clvEnsureRendered(filterIdxTarget) {
     if (filterIdxTarget < 0 || filterIdxTarget >= clvState.filteredIndices.length) return;
     const container = document.getElementById('clv-log-container');
-    // Check if the target raw index is already in the DOM
     const rawIdx = clvState.filteredIndices[filterIdxTarget];
     if (container.querySelector(`[data-raw-idx="${rawIdx}"]`)) return;
 
-    // The line was recycled. Clear DOM and re-render a window around the target.
     container.innerHTML = '';
     const windowHalf = Math.floor(clvState.chunkSize * 2);
     clvState.renderedUpTo = Math.max(0, filterIdxTarget - windowHalf);
 
-    // Render chunks until we pass the target
     while (clvState.renderedUpTo <= filterIdxTarget && clvState.renderedUpTo < clvState.filteredIndices.length) {
         clvRenderChunk();
     }
 }
 
-// Scroll to error block and highlight all lines in the block
+// Scroll to the cursor's error block and highlight every line in it.
 function _clvScrollToErrorBlock(cursorIdx) {
     const blocks = clvState.errorBlocks;
     const block = blocks[cursorIdx];
@@ -841,10 +801,8 @@ function _clvScrollToErrorBlock(cursorIdx) {
     const filterIdx = clvState.filteredIndices.indexOf(anchorRawIdx);
     if (filterIdx === -1) { clvUpdateErrNavButtons(); return; }
 
-    // Ensure the target is rendered.
     clvEnsureRendered(filterIdx);
 
-    // Scroll to anchor and highlight entire block
     const container = document.getElementById('clv-log-container');
     const anchorEl = container.querySelector(`[data-raw-idx="${anchorRawIdx}"]`);
     if (anchorEl) anchorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -860,17 +818,16 @@ function _clvScrollToErrorBlock(cursorIdx) {
     clvUpdateErrNavButtons();
 }
 
-// Navigate between error blocks (first, next, prev) with smart scrolling and highlighting
+// Jump between error blocks (first / next / prev). Skips blocks already in view.
 function clvErrNav(action) {
-    if (clvState.phase !== 'ready') return; // Block nav during loading
+    if (clvState.phase !== 'ready') return;
     const blocks = clvState.errorBlocks;
     if (blocks.length === 0) return;
 
-    // Clear previous highlights
     document.querySelectorAll('.clv-line--error-active').forEach(el => el.classList.remove('clv-line--error-active'));
     document.querySelectorAll('.clv-line--error-block-anchor').forEach(el => el.classList.remove('clv-line--error-block-anchor'));
 
-    // If not in 'all' or 'errors' filter, switch to 'all'
+    // Only 'all' / 'errors' filters surface error blocks.
     if (clvState.activeFilter !== 'all' && clvState.activeFilter !== 'errors') {
         clvSetFilter('all');
     }
@@ -878,13 +835,12 @@ function clvErrNav(action) {
     if (action === 'first') {
         clvState.errorBlockCursor = 0;
     } else if (action === 'next') {
-        // If no block is active yet, treat Next as "jump to first"
+        // Treat Next as "jump to first" when nothing is active yet.
         if (clvState.errorBlockCursor === -1) {
             clvState.errorBlockCursor = 0;
             _clvScrollToErrorBlock(0);
             return;
         }
-        // Find next block that is NOT visible in viewport
         let candidate = clvState.errorBlockCursor + 1;
         while (candidate < blocks.length && clvIsBlockVisible(blocks[candidate])) {
             candidate++;
@@ -892,11 +848,9 @@ function clvErrNav(action) {
         if (candidate < blocks.length) {
             clvState.errorBlockCursor = candidate;
         } else if (clvState.errorBlockCursor < blocks.length - 1) {
-            // All remaining are visible; just go to last
             clvState.errorBlockCursor = blocks.length - 1;
         }
     } else if (action === 'prev') {
-        // Find previous block that is NOT visible in viewport
         let candidate = clvState.errorBlockCursor - 1;
         while (candidate >= 0 && clvIsBlockVisible(blocks[candidate])) {
             candidate--;
@@ -911,13 +865,13 @@ function clvErrNav(action) {
     _clvScrollToErrorBlock(clvState.errorBlockCursor);
 }
 
-// Change active filter and rebuild log view (all, errors, warnings, info, steps)
+// Switch the active filter and rebuild the log view.
 function clvSetFilter(filter) {
     clvState.activeFilter = filter;
     document.querySelectorAll('.clv-filter-btn').forEach(b =>
         b.classList.toggle('active', b.dataset.clvFilter === filter));
 
-    // Reset error navigation cursor so next/prev starts fresh (F5)
+    // Reset error-nav cursor so next/prev starts fresh.
     clvState.errorBlockCursor = -1;
     document.querySelectorAll('.clv-line--error-active').forEach(el =>
         el.classList.remove('clv-line--error-active'));
@@ -928,23 +882,21 @@ function clvSetFilter(filter) {
     const container = document.getElementById('clv-log-container');
     container.innerHTML = '';
 
-    // Steps filter uses structured rendering
+    // Steps view has its own structured renderer.
     if (filter === 'steps') {
         clvRenderStepsView(container);
         return;
     }
 
-    // All other filters use line-based rendering
     clvBuildFilteredList();
     clvState.renderedUpTo = 0;
     clvRenderChunk();
     clvSetupObserver();
 
-    // Re-apply search
     if (clvState.searchTerm) clvSearch(clvState.searchTerm);
 }
 
-// Render structured view of scenarios and test blocks with embedded errors (Steps filter)
+// Steps view — structured render of scenarios / test blocks with errors inline.
 function clvRenderStepsView(container) {
     if (clvState.parsedScenarios.length === 0) {
         container.innerHTML = '<div style="padding:40px 20px;color:#64748B;text-align:center;font-size:13px">No scenarios or test blocks found in this log.</div>';
@@ -954,21 +906,19 @@ function clvRenderStepsView(container) {
     const fragment = document.createDocumentFragment();
 
     for (const sc of clvState.parsedScenarios) {
-        // Scenario / test-block header
         const header = document.createElement('div');
         header.className = 'clv-scenario-header';
         const statusBadge = document.createElement('span');
         statusBadge.className = 'clv-scenario-status clv-scenario-status--' + sc.status;
         statusBadge.textContent = sc.status === 'fail' ? 'FAIL' : 'PASS';
         const nameSpan = document.createElement('span');
-        // Adapt label: Cucumber uses "Scenario:", generic uses "Test:"
+        // Cucumber → "Scenario:"; everything else → "Test:".
         const labelPrefix = sc.framework === 'cucumber' ? 'Scenario: ' : 'Test: ';
         nameSpan.textContent = labelPrefix + sc.name;
         header.appendChild(statusBadge);
         header.appendChild(nameSpan);
         fragment.appendChild(header);
 
-        // Steps
         for (const step of sc.steps) {
             const entry = document.createElement('div');
             entry.className = 'clv-step-entry clv-step-entry--' + step.status;
@@ -985,11 +935,10 @@ function clvRenderStepsView(container) {
             entry.appendChild(textSpan);
             fragment.appendChild(entry);
 
-            // If step has associated error, show it inline
+            // Inline the step's error lines, separating message from deep stack frames.
             if (step.error && step.error.length > 0) {
                 const errBlock = document.createElement('div');
                 errBlock.className = 'clv-step-error';
-                // Show first few error lines (skip deep stack trace)
                 const errLines = step.error.filter(l => !(/^\s+at\s/.test(l) || /^\s+\tat\s/.test(l) || /\.\.\.\s\d+\smore$/.test(l)));
                 const traceLines = step.error.filter(l => /^\s+at\s/.test(l) || /^\s+\tat\s/.test(l) || /\.\.\.\s\d+\smore$/.test(l) || /^\s+\u273d\./.test(l));
                 let errText = errLines.map(l => l.trim()).join('\n');
@@ -1002,8 +951,8 @@ function clvRenderStepsView(container) {
             }
         }
 
-        // Generic test blocks without explicit steps: show associated
-        // error lines directly under the header (Playwright, Cypress, etc.)
+        // Generic blocks (Playwright, Cypress, etc.) have no explicit steps —
+        // attach error lines directly under the header.
         if (sc.steps.length === 0 && sc.errorLines.length > 0) {
             const errBlock = document.createElement('div');
             errBlock.className = 'clv-step-error';
@@ -1018,19 +967,17 @@ function clvRenderStepsView(container) {
     container.appendChild(fragment);
 }
 
-// Jump to the first error block
 function clvJumpToFirstError() {
-    // Delegate to error nav
     clvErrNav('first');
 }
 
-// Search log for a term and build list of matching lines
+// Search for a term across filtered lines and jump to the first match.
 function clvSearch(term) {
     clvState.searchTerm = term.toLowerCase();
     clvState.searchMatches = [];
     clvState.searchCursor = -1;
 
-    // Clear existing highlights (preserve fold toggles)
+    // Clear previous highlights while preserving fold toggles.
     document.querySelectorAll('.clv-line-text').forEach(textEl => {
         if (!textEl.querySelector('.clv-match')) return;
         const lineEl = textEl.closest('.clv-line');
@@ -1039,7 +986,6 @@ function clvSearch(term) {
         const foldToggle = textEl.querySelector('.clv-fold-toggle');
         if (foldToggle) {
             const foldHtml = foldToggle.outerHTML;
-            // Restore fold toggle + linkified text
             const textNode = document.createElement('span');
             textNode.innerHTML = clvLinkifyHtml(escapeHtml(rawText));
             textEl.innerHTML = foldHtml;
@@ -1054,7 +1000,6 @@ function clvSearch(term) {
     const countEl = document.getElementById('clv-search-count');
     if (!term) { countEl.textContent = ''; return; }
 
-    // Find matches in filtered indices
     for (let i = 0; i < clvState.filteredIndices.length; i++) {
         const rawIdx = clvState.filteredIndices[i];
         if (clvState.rawLines[rawIdx].text.toLowerCase().includes(clvState.searchTerm)) {
@@ -1068,11 +1013,11 @@ function clvSearch(term) {
 
     if (clvState.searchMatches.length > 0) {
         clvHighlightSearch();
-        clvSearchNav(1); // Jump to first match
+        clvSearchNav(1);   // jump to first match
     }
 }
 
-// Highlight all search matches in currently rendered lines
+// Highlight search matches in currently rendered lines.
 function clvHighlightSearch() {
     if (!clvState.searchTerm) return;
     const container = document.getElementById('clv-log-container');
@@ -1083,14 +1028,13 @@ function clvHighlightSearch() {
         const textEl = lineEl.querySelector('.clv-line-text');
         if (!textEl) return;
 
-        // Use rawLines text (not textContent which includes fold toggle chars)
+        // Use raw text — textContent would include the fold-toggle characters.
         const rawIdx = parseInt(lineEl.dataset.rawIdx, 10);
         const rawText = clvState.rawLines[rawIdx] ? clvState.rawLines[rawIdx].text : textEl.textContent;
         const lower = rawText.toLowerCase();
 
         if (!lower.includes(term)) return;
 
-        // Preserve fold toggle if present
         const foldToggle = textEl.querySelector('.clv-fold-toggle');
         const foldHtml = foldToggle ? foldToggle.outerHTML : '';
 
@@ -1100,7 +1044,7 @@ function clvHighlightSearch() {
 
         textEl.innerHTML = foldHtml + temp.innerHTML;
 
-        // Re-bind fold toggle event if it was preserved
+        // Re-bind the preserved fold toggle's click handler.
         if (foldHtml) {
             const newToggle = textEl.querySelector('.clv-fold-toggle');
             if (newToggle) {
@@ -1110,19 +1054,18 @@ function clvHighlightSearch() {
     });
 }
 
-// Walk every text node inside `root` and wrap occurrences of `term`
+// Wrap every occurrence of `term` inside `root` in a .clv-match span.
+// Idempotent — already-wrapped text nodes are skipped.
 function clvHighlightTermInTextNodes(root, term) {
     if (!term) return;
     const termLow = term.toLowerCase();
     const termLen = term.length;
 
-    // Collect text nodes upfront — never iterate the walker while mutating
+    // Collect text nodes up front — never iterate a TreeWalker while mutating.
     const walker = document.createTreeWalker(
         root, NodeFilter.SHOW_TEXT,
         {
             acceptNode: function(node) {
-                // Skip text nodes already inside a clv-match wrapper to keep
-                // re-highlight idempotent.
                 if (node.parentNode && node.parentNode.classList &&
                     node.parentNode.classList.contains('clv-match')) {
                     return NodeFilter.FILTER_REJECT;
@@ -1161,11 +1104,10 @@ function clvHighlightTermInTextNodes(root, term) {
     }
 }
 
-// Navigate to next/previous search match
+// Step to the next/previous search match.
 function clvSearchNav(direction) {
     if (clvState.searchMatches.length === 0) return;
 
-    // Remove previous active highlight
     document.querySelectorAll('.clv-match-active').forEach(el => el.classList.remove('clv-match-active'));
 
     clvState.searchCursor += direction;
@@ -1176,13 +1118,11 @@ function clvSearchNav(direction) {
 
     clvEnsureRendered(filterIdx);
 
-    // Scroll to line
     const rawIdx = clvState.filteredIndices[filterIdx];
     const container = document.getElementById('clv-log-container');
     const line = container.querySelector(`[data-raw-idx="${rawIdx}"]`);
     if (line) {
         line.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        // Highlight the specific match in this line
         const match = line.querySelector('.clv-match');
         if (match) match.classList.add('clv-match-active');
     }
@@ -1191,13 +1131,12 @@ function clvSearchNav(direction) {
         (clvState.searchCursor + 1) + ' / ' + clvState.searchMatches.length;
 }
 
-// Keyboard shortcuts for CLV (Ctrl+F for search, Enter/Shift+Enter for search nav)
-// Note: Escape is handled in setupEventListeners() with priority dispatch.
+// CLV keyboard shortcuts: Ctrl/Cmd+F focuses search; Enter / Shift+Enter cycle matches.
+// Escape lives in setupEventListeners() so it has priority over the modal stack.
 document.addEventListener('keydown', function(e) {
     const overlay = document.getElementById('clv-overlay');
     if (!overlay || !overlay.classList.contains('active')) return;
 
-    // Ctrl+F / Cmd+F — focus search (override browser find)
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();
         const input = document.getElementById('clv-search');
@@ -1205,7 +1144,6 @@ document.addEventListener('keydown', function(e) {
         return;
     }
 
-    // Enter / Shift+Enter — search navigation (when search input focused)
     if (e.key === 'Enter' && document.activeElement && document.activeElement.id === 'clv-search') {
         e.preventDefault();
         clvSearchNav(e.shiftKey ? -1 : 1);
@@ -1213,10 +1151,11 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// Resizable panel with mouse drag on edges
+// Drag-to-resize the CLV panel from any of its edges. Resize is symmetric:
+// the panel grows/shrinks equally from the centre.
 (function() {
-    const MIN_W = 960;    // minimum width = default width
-    const MIN_H_VH = 82;  // minimum height as vh
+    const MIN_W = 960;
+    const MIN_H_VH = 82;
 
     function getMinH() { return window.innerHeight * MIN_H_VH / 100; }
 
@@ -1228,7 +1167,7 @@ document.addEventListener('keydown', function(e) {
         const panel = document.getElementById('clv-panel');
         if (!panel) return;
 
-        const dir = handle.dataset.clvResize; // 'e', 's', 'se', 'w', 'sw'
+        const dir = handle.dataset.clvResize;   // 'e' | 's' | 'se' | 'w' | 'sw'
         const startX = e.clientX;
         const startY = e.clientY;
         const rect = panel.getBoundingClientRect();
@@ -1246,19 +1185,16 @@ document.addEventListener('keydown', function(e) {
             let newW = startW;
             let newH = startH;
 
-            // Horizontal resize — symmetric (both sides expand equally from center)
+            // *2 because the panel grows symmetrically from the centre.
             if (dir.includes('e')) {
-                newW = startW + dx * 2; // *2 because growth is symmetric
+                newW = startW + dx * 2;
             } else if (dir.includes('w')) {
                 newW = startW - dx * 2;
             }
-
-            // Vertical resize — symmetric
             if (dir.includes('s')) {
                 newH = startH + dy * 2;
             }
 
-            // Clamp
             newW = Math.max(MIN_W, Math.min(newW, maxW));
             newH = Math.max(minH, Math.min(newH, maxH));
 
@@ -1277,7 +1213,6 @@ document.addEventListener('keydown', function(e) {
     });
 })();
 
-// Copy all filtered lines to clipboard
 function clvCopyFiltered() {
     const lines = [];
     for (const rawIdx of clvState.filteredIndices) {
@@ -1292,7 +1227,6 @@ function clvCopyFiltered() {
     });
 }
 
-// Copy a single line to clipboard
 function clvCopyLine(rawIdx) {
     const line = clvState.rawLines[rawIdx];
     if (!line) return;
@@ -1301,7 +1235,6 @@ function clvCopyLine(rawIdx) {
     }).catch(() => {});
 }
 
-// Show temporary toast notification
 function clvShowCopyToast(msg) {
     const toast = document.getElementById('clv-copy-toast');
     if (!toast) return;
@@ -1311,7 +1244,7 @@ function clvShowCopyToast(msg) {
     clvState._toastTimer = setTimeout(() => toast.classList.remove('visible'), 1500);
 }
 
-// Download full log as text file
+// Download the full log as a .log file.
 function clvDownload() {
     if (clvState.rawLines.length === 0) return;
     const jobName = (document.getElementById('clv-job-name').textContent || 'console').replace(/\s+/g, '-');
@@ -1329,29 +1262,25 @@ function clvDownload() {
     URL.revokeObjectURL(url);
 }
 
-// Toggle anchor state on a line (only one anchor allowed at a time)
+// Toggle the anchor on a line — only one anchor can be active at a time.
 function clvAnchorLine(rawIdx, lineEl) {
-    // Toggle anchor on/off
     if (lineEl.classList.contains('clv-line--anchored')) {
         lineEl.classList.remove('clv-line--anchored');
         return;
     }
-    // Clear previous anchor
     const prev = document.querySelector('.clv-line--anchored');
     if (prev) prev.classList.remove('clv-line--anchored');
     lineEl.classList.add('clv-line--anchored');
 }
 
-// Collapse/expand feature/scenario/test-block sections with keyboard-friendly fold toggle
+// Collapse/expand feature / scenario / test-block sections.
 function clvToggleFold(rawIdx, toggleEl) {
     const container = document.getElementById('clv-log-container');
     const isCollapsed = toggleEl.classList.toggle('collapsed');
     const triggerLine = clvState.rawLines[rawIdx];
     const isFeat = triggerLine.cls === 'feature';
-    // Section-boundary classes: feature, scenario, test-block
     const sectionHeaders = new Set(['feature', 'scenario', 'test-block']);
 
-    // Walk subsequent rendered lines and fold/unfold
     const allLines = container.querySelectorAll('.clv-line');
     let found = false;
     for (const el of allLines) {
@@ -1360,7 +1289,8 @@ function clvToggleFold(rawIdx, toggleEl) {
         if (!found) continue;
 
         const cls = clvState.rawLines[idx].cls;
-        // Stop at next feature (if folding a feature) or next section header (if folding scenario/test-block)
+        // Stop at the next boundary — next feature (when folding a feature)
+        // or next section header (when folding a scenario/test-block).
         if (isFeat && cls === 'feature') break;
         if (!isFeat && sectionHeaders.has(cls)) break;
 
@@ -1374,21 +1304,19 @@ function clvToggleFold(rawIdx, toggleEl) {
     toggleEl.textContent = isCollapsed ? '▸' : '▾';
 }
 
-// Close console log modal and cleanup all state
+// Close the CLV modal and release all state so memory doesn't grow per-open.
 function clvClose() {
     const overlay = document.getElementById('clv-overlay');
+    if (overlay) overlay.setAttribute('aria-hidden', 'true');
     overlay.classList.remove('active');
 
-    // Abort any in-flight fetch
     if (clvState.abortController) {
         clvState.abortController.abort();
         clvState.abortController = null;
     }
 
-    // Clear debounced scroll/recycle timer
     if (_clvRecycleTimer) { clearTimeout(_clvRecycleTimer); _clvRecycleTimer = null; }
 
-    // DOM cleanup — release log content from memory
     document.getElementById('clv-log-container').innerHTML = '';
     clvState.rawLines = [];
     clvState.filteredIndices = [];
@@ -1407,11 +1335,10 @@ function clvClose() {
         clvState.observer = null;
     }
 
-    // Remove scroll listener for DOM recycling
     const body = document.getElementById('clv-body');
     if (body) body.removeEventListener('scroll', clvOnBodyScroll);
 }
 
-// Legacy aliases for backward compatibility
+// Legacy aliases — keep until all call sites migrate to clvOpen / clvClose.
 function openErrorLogModal(jobId) { clvOpen(jobId); }
 function closeErrorLogModal() { clvClose(); }

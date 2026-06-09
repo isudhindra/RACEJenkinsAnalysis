@@ -1,9 +1,4 @@
-"""Dashboard page + runtime config endpoint.
-
-These two routes don't fit any of the API domains — they're
-infrastructure for the page itself.  Kept together so ``application.py``
-stays a pure factory.
-"""
+"""Dashboard page + runtime config endpoint — infrastructure for the page itself."""
 
 import json
 import time
@@ -15,10 +10,8 @@ from jjat.pipeline import DEFAULT_WORKERS
 bp = Blueprint("dashboard", __name__)
 
 
-# Asset cache-buster — bound to the time the blueprint module first
-# loaded.  Every static JS / CSS link in the template appends
-# ``?v={{ asset_v }}``, so a server restart forces the browser to
-# refetch all bundles instead of serving stale cached copies.
+# Cache-buster appended to every static asset URL — a server restart
+# forces browsers to refetch instead of serving stale bundles.
 _ASSET_VERSION = str(int(time.time()))
 
 
@@ -30,7 +23,7 @@ def _inject_asset_version() -> dict:
 
 @bp.route("/", methods=["GET"])
 def dashboard() -> str:
-    """Serve ``dashboard.html`` with the classifier taxonomy + contexts inline."""
+    """Serve ``dashboard.html`` with classifier taxonomy + contexts inlined as JSON."""
     classifier = current_app.classifier  # type: ignore[attr-defined]
     taxonomy = {
         "domain_colors": classifier.domain_colors,
@@ -45,16 +38,10 @@ def dashboard() -> str:
 
 @bp.route("/api/config", methods=["GET"])
 def get_config():
-    """Return runtime config + analysis taxonomy as JSON.
-
-    Consumed by the frontend at boot to learn the configured worker
-    count, the available Jenkins instances, and the colour map for
-    classification labels.
-    """
+    """Return runtime config + analysis taxonomy as JSON, consumed at frontend boot."""
     classifier = current_app.classifier  # type: ignore[attr-defined]
     return jsonify({
-        # Fallback uses the canonical default so the browser never sees a
-        # value that disagrees with what the backend actually runs with.
+        # Fallback uses the canonical default so the browser never disagrees with the backend.
         "thread_pool_size": current_app.config.get("thread_pool_size", DEFAULT_WORKERS),
         "default_timeout": current_app.config.get("default_timeout", 30),
         "contexts": current_app.config.get("contexts", {}),

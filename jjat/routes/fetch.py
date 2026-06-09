@@ -1,10 +1,4 @@
-"""Full-fetch SSE endpoint.
-
-Single route — ``POST /api/fetch/stream`` — but the most involved one in
-the app.  Validates the source mode (view URL, job list, or raw list),
-resolves the Jenkins view URL when needed, builds an
-:class:`AnalysisOrchestrator`, and yields the SSE pipeline.
-"""
+"""Full-fetch SSE endpoint — validates source mode, builds an orchestrator, streams events."""
 
 import uuid
 
@@ -25,11 +19,7 @@ bp = Blueprint("fetch", __name__)
 
 @bp.route("/api/fetch/stream", methods=["POST"])
 def fetch_stream():
-    """Stream a full fetch of jobs via SSE.
-
-    Clears ``state.job_store``, generates a new operation ID, runs the
-    Stage 1 → Stage 2 pipeline (see :mod:`jjat.routes._streaming`).
-    """
+    """Stream a full fetch of jobs via SSE — clears the store, runs Stage 1 → Stage 2."""
     data = resolve_credentials(request.get_json())
     operation_id = str(uuid.uuid4())
     state.active_operation_id = operation_id
@@ -37,21 +27,17 @@ def fetch_stream():
 
     source_mode = data.get("source_mode")
     jenkins_url = data.get("jenkins_url")
-    # The only per-app source of truth.  Previous code accepted an
-    # override in the request body — no frontend ever sent one, and the
-    # path was a silent security smell (any caller could ask for an
-    # arbitrary thread count).  Dropped.
+    # Per-app source of truth — request-body overrides were dropped to
+    # prevent arbitrary thread counts from untrusted callers.
     max_workers = current_app.config["thread_pool_size"]
 
-    # Size the HTTP pool to match the worker count so the full parallelism
-    # actually reaches Jenkins instead of queuing behind a small default pool.
+    # Pool size matches worker count so concurrency actually reaches Jenkins.
     client = make_client(
         data,
         timeout=current_app.config["default_timeout"],
         pool_size=max_workers,
     )
 
-    # Determine the job list based on source mode.
     if source_mode == "view_url":
         view_url = data.get("view_url", "")
         view_path = data.get("view_path", "")
@@ -62,9 +48,7 @@ def fetch_stream():
             # Legacy relative-path fallback.
             view_url = jenkins_url.rstrip("/") + "/" + view_url.lstrip("/")
 
-        # Defence-in-depth: the view must belong to the Jenkins instance
-        # the user picked.  Prevents accidental cross-tenant calls if the
-        # frontend hands us a stale URL.
+        # Defence-in-depth — reject views that don't belong to the picked instance.
         normalized_base = jenkins_url.rstrip("/").lower()
         normalized_view = view_url.rstrip("/").lower()
         if not normalized_view.startswith(normalized_base):
@@ -90,13 +74,13 @@ def fetch_stream():
             return Response(error_gen(), mimetype="text/event-stream")
 
     elif source_mode == "job_list":
-        # Custom job-list mode: ``job_names`` is a list of plain names.
+        # Custom job-list mode — body carries plain names; we synthesise the URLs.
         job_names = data.get("job_names", [])
         base = jenkins_url.rstrip("/")
         jobs = [{"name": jn, "url": f"{base}/job/{jn}/"} for jn in job_names]
 
     else:
-        # Fallback: caller passed an explicit ``jobs`` list of dicts.
+        # Caller passed an explicit ``jobs`` list of dicts.
         jobs = data.get("jobs", [])
 
     if not jobs:

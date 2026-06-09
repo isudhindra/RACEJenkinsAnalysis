@@ -1,8 +1,7 @@
 """Flask blueprints — one per HTTP-API domain.
 
-``register_blueprints(app)`` wires them all into a single Flask app.
-Each blueprint file owns its own routes plus any helpers used only by
-that domain.  Cross-cutting helpers live in :mod:`jjat.lib`.
+Each file owns its routes plus any domain-only helpers; cross-cutting
+helpers live in :mod:`jjat.lib`.
 """
 
 from flask import Flask
@@ -20,13 +19,10 @@ from jjat.routes import (
 
 
 def register_blueprints(app: Flask) -> None:
-    """Register every blueprint on the given Flask app.
+    """Register every blueprint on the Flask app.
 
-    Call from :func:`jjat.application.create_app` once the app and its
-    classifier / config have been initialised.  Order does not matter —
-    blueprints carry their own URL prefixes — but ``dashboard`` is
-    registered first because it owns the ``/`` route and the asset-
-    version context processor that every template uses.
+    Dashboard goes first because it owns ``/`` and the asset-version
+    context processor every template depends on.
     """
     app.register_blueprint(dashboard.bp)
     app.register_blueprint(auth.bp)

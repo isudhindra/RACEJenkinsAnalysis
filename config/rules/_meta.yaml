@@ -1,10 +1,6 @@
-# Cross-cutting classifier metadata.
-#
-# This file holds the bits that aren't per-domain — fallback labels for
-# unclassified jobs and the domain → colour mapping the frontend uses
-# for the analysis chips.  Every other YAML in this directory contributes
-# rules; this one contributes none.
-#
+# Classifier metadata used by every rule file in this folder.
+# Holds two things: fallback labels for jobs no rule matched, and the
+# colour the dashboard chips use for each failure domain.
 # To add a new rule, see HOW-TO-ADD-A-RULE.md in this folder.
 
 fallback_labels:

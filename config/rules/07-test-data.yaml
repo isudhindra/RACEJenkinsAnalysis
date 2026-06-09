@@ -1,7 +1,6 @@
-# ─── Test Data rules ──────────────────────────────────────────────────────
-# Missing records and null/empty test data — usually a setup hook didn't
-# run or the fixture seed didn't take.
-# Priority band: 36-38 (TIER 1).
+# Test data problems — records missing, fields empty, or expected
+# fixtures absent. Usually the test setup didn't seed the data correctly,
+# not a product bug.
 
 rules:
   - name: "test_data_missing"

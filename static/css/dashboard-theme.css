@@ -1,11 +1,11 @@
-/* ============================================================================
- * Dashboard theme — colour, typography, components.
- * Loaded after the inline <style> in dashboard.html so it cascades on top.
- * Remove the <link> tag to revert to the original look.
- * ========================================================================= */
+/* 
+ * Dashboard theme — brutalist black-border palette, typography, and components.
+ * Layered on top of dashboard.css via !important so it always wins the cascade.
+ * Remove the <link> in dashboard.html to revert to the base styles.
+ * = */
 
 
-/* ---- Theme tokens ------------------------------------------------------- */
+/*  Theme tokens --- */
 :root {
   /* Palette */
   --theme-blue: #1d70b8;
@@ -46,7 +46,8 @@
   --color-border-strong: var(--theme-black);
   --color-border-subtle: #d8d8d8;
 
-  /* Status (semantic names preserved for the rest of the app) */
+  /* Status semantics — names kept stable so app code doesn't have to know
+   * which theme is loaded. */
   --color-passed: var(--theme-green);
   --color-passed-muted: var(--theme-light-green);
   --color-passed-subtle: #e8f3ee;
@@ -65,7 +66,7 @@
   --color-error-bg: var(--theme-light-red);
   --color-error-border: var(--theme-red);
 
-  /* Flat — drop soft shadows */
+  /* Brutalist look: no soft shadows. Focus uses a yellow ring instead. */
   --shadow-xs: none;
   --shadow-sm: none;
   --shadow-md: none;
@@ -77,7 +78,7 @@
 }
 
 
-/* ---- Typography --------------------------------------------------------- */
+/*  Typography - */
 body,
 button,
 input,
@@ -99,9 +100,9 @@ h1,
 }
 
 
-/* ---- Top header bar ----------------------------------------------------- */
-/* Black strip + 4px blue accent below, drawn via box-shadow so it doesn't
- * take layout space (avoids shifting the header content off-centre). */
+/*  Top header bar - */
+/* Black strip with a 4px blue accent below. The accent uses inset box-shadow
+ * (not border) so it doesn't push header content off-centre. */
 .app-header {
   background: var(--theme-black) !important;
   color: var(--theme-white) !important;
@@ -134,7 +135,7 @@ h1,
 }
 
 
-/* ---- Links -------------------------------------------------------------- */
+/*  Links -- */
 a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo) {
   color: var(--theme-blue);
   text-decoration: underline;
@@ -152,9 +153,9 @@ a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
 }
 
 
-/* ---- Buttons ------------------------------------------------------------ */
-/* Square corners; primary = green with a 2px-darker bottom shadow (the
- * "pressable" lift); secondary = white with 2px black border. */
+/*  Buttons  */
+/* Square corners. Primary = green with a 2px darker bottom shadow ("pressable"
+ * lift). Secondary = white with a 2px black border. */
 .cfg-btn,
 .ops-btn,
 .btn {
@@ -185,10 +186,12 @@ a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
   color: var(--theme-white) !important;
 }
 
-/* Secondary */
+/* Secondary covers ops-btn-secondary AND ops-btn-action (Rerun, Failures) so
+ * every toolbar button shares the same brutalist shell. Without action here,
+ * Rerun/Failures fell back to the soft base and looked orphaned. */
 .cfg-btn-secondary,
 .ops-btn-secondary,
-.ops-btn-view {
+.ops-btn-action {
   background: var(--theme-white) !important;
   color: var(--theme-black) !important;
   border: 2px solid var(--theme-black) !important;
@@ -197,8 +200,101 @@ a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
 
 .cfg-btn-secondary:hover,
 .ops-btn-secondary:hover,
-.ops-btn-view:hover {
+.ops-btn-action:hover {
   background: var(--theme-light-grey) !important;
+}
+
+/* Ghost (Clear, Diag): transparent at rest so they recede, gain the full
+ * brutalist border on hover/focus to confirm they're interactive. */
+.ops-btn-ghost {
+  background: transparent !important;
+  color: var(--theme-black) !important;
+  border: 2px solid transparent !important;
+  box-shadow: none !important;
+}
+
+.ops-btn-ghost:hover {
+  background: var(--theme-light-grey) !important;
+  border-color: var(--theme-black) !important;
+  box-shadow: 0 2px 0 var(--theme-black) !important;
+}
+
+/* Toolbar group separators. Beefed up to 2px black so they don't look
+ * like hairline rendering glitches next to the 2px button borders. */
+.ops-sep {
+  background: var(--theme-black) !important;
+  width: 2px !important;
+  height: 24px !important;
+  margin: 0 6px !important;
+}
+
+/* Match the dropdown surface to the triggering button (same black shell). */
+.ops-dropdown-menu {
+  border: 2px solid var(--theme-black) !important;
+  border-radius: 0 !important;
+  box-shadow: 0 4px 0 var(--theme-black) !important;
+}
+
+/* Kill the base press-ripple: the 2px black drop shadow already gives
+ * tactile feedback, and the blue tint clashes with this palette. */
+.ops-btn::after {
+  display: none !important;
+}
+
+/* Detail | Summary segmented control. Active segment inverts. */
+.ops-segment {
+  border-radius: 0 !important;
+  border: 2px solid var(--theme-black) !important;
+  box-shadow: 0 2px 0 var(--theme-black) !important;
+  background: var(--theme-white) !important;
+  color: var(--theme-black) !important;
+}
+
+.ops-segment + .ops-segment {
+  border-left-width: 0 !important;
+}
+
+.ops-segment.is-active {
+  background: var(--theme-black) !important;
+  color: var(--theme-white) !important;
+}
+
+.ops-segment:hover {
+  background: var(--theme-light-grey) !important;
+}
+
+.ops-segment.is-active:hover {
+  background: #1a1a1a !important;
+}
+
+/* Split button (Refresh): main button + caret read as one control with
+ * an internal divider — caret drops its left border. */
+.ops-split .ops-split-main,
+.ops-split .ops-split-caret {
+  border-radius: 0 !important;
+}
+
+.ops-split .ops-split-main {
+  border-right-width: 0 !important;
+}
+
+/* Failures button when count is 0 — keep the shell, mute the fill. */
+.ops-btn-action.is-empty {
+  background: var(--theme-light-grey) !important;
+  color: var(--theme-dark-grey) !important;
+}
+
+.ops-btn-action.is-empty:hover {
+  background: var(--theme-light-grey) !important;
+}
+
+/* Heavier zone separator — marks the boundary between "act on rows" and
+ * "narrow the view". */
+.ops-sep--zone {
+  background: var(--theme-black) !important;
+  width: 2px !important;
+  height: 28px !important;
+  margin: 0 8px !important;
 }
 
 /* Danger */
@@ -227,8 +323,8 @@ a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
 }
 
 
-/* ---- Focus state -------------------------------------------------------- */
-/* Yellow background + 3px black bottom bar on anything keyboard-focusable. */
+/*  Focus state  */
+/* Yellow background + black 3px underbar for keyboard-focused elements. */
 *:focus,
 *:focus-visible {
   outline: 3px solid transparent !important;
@@ -239,7 +335,7 @@ a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
     0 4px var(--theme-black) !important;
 }
 
-/* Buttons keep their own colour and gain a yellow outline + black shadow. */
+/* Buttons preserve their fill on focus and gain a yellow outline. */
 .cfg-btn:focus,
 .ops-btn:focus,
 .btn:focus,
@@ -252,7 +348,7 @@ button:focus {
 }
 
 
-/* ---- Inputs ------------------------------------------------------------- */
+/*  Inputs - */
 input[type="text"],
 input[type="password"],
 input[type="datetime-local"],
@@ -279,8 +375,8 @@ textarea:focus {
 }
 
 
-/* ---- Tables ------------------------------------------------------------- */
-/* No row dividers, 2px black header underline, hover highlight. */
+/*  Tables - */
+/* 2px black header underline, 1px row dividers, hover highlight. */
 table thead th {
   border-bottom: 2px solid var(--theme-black) !important;
   background: var(--theme-white) !important;
@@ -298,8 +394,8 @@ table tbody tr:hover {
 }
 
 
-/* ---- Status tags (per-row + release) ------------------------------------ */
-/* Rectangular, uppercase, bold. Status colour fills the whole pill. */
+/*  Status tags (per-row + release)  */
+/* Rectangular uppercase pills. Status colour fills the whole tag. */
 .regression-badge,
 .badge-status,
 .badge-passed,
@@ -316,7 +412,7 @@ table tbody tr:hover {
   padding: 4px 8px !important;
 }
 
-/* Status → fill colour */
+/* Per-status fill colours. */
 .regression-badge-passed,
 .badge-passed,
 .badge-status[data-status="passed"] {
@@ -349,14 +445,14 @@ table tbody tr:hover {
   color: var(--theme-white) !important;
 }
 
-/* The legacy "dot" indicator is redundant on solid tags. */
+/* Hide the legacy dot — solid-fill pills don't need one. */
 .regression-badge-dot {
   display: none !important;
 }
 
 
-/* ---- Panels / cards ----------------------------------------------------- */
-/* Flat surfaces, square corners, hairline border. */
+/*  Panels / cards - */
+/* Flat surfaces — square corners, hairline border, no shadow. */
 .kpi-panel,
 .kpi-card,
 .config-panel,
@@ -373,8 +469,8 @@ table tbody tr:hover {
 }
 
 
-/* ---- Log-analysis chips ------------------------------------------------- */
-/* Rectangular and bold; background colour comes from rules.yaml domain. */
+/*  Log-analysis chips - */
+/* Rectangular bold pills. Background colour set inline from the rule domain. */
 .log-analysis-chip,
 .la-chip,
 .classification-chip {
@@ -387,10 +483,10 @@ table tbody tr:hover {
 }
 
 
-/* ---- Catch-all pill normaliser ----------------------------------------- */
-/* Any state pill (every existing class + defensive [class*=…] sweep) gets
- * the same shape. The exceptions below (.header-status-chip, .ops-badge,
- * .promo-cat-tag, .badge-rerun) override with higher specificity. */
+/*  Catch-all pill normaliser - */
+/* Force every state pill to the same shape via a defensive class-name sweep.
+ * Exceptions (.header-status-chip, .ops-badge, .promo-cat-tag, .badge-rerun)
+ * override below with higher specificity. */
 [class*="badge"],
 [class*="-chip"],
 [class*="-pill"],
@@ -412,15 +508,15 @@ table tbody tr:hover {
   white-space: nowrap;
 }
 
-/* Circular indicators (dots) stay circular. */
+/* Dots stay circular regardless of the catch-all above. */
 .regression-badge-dot,
 [class*="-dot"] {
   border-radius: 999px !important;
 }
 
 
-/* ---- Status / Release Status column parity ----------------------------- */
-/* Identical width + alignment so the eye reads across cleanly. */
+/*  Status / Release Status column parity - */
+/* Matched widths + centring so users can read both columns side by side. */
 .col-status,
 .col-regression {
   width: 110px !important;
@@ -441,7 +537,7 @@ table tbody tr:hover {
 }
 
 
-/* ---- Compact table ----------------------------------------------------- */
+/*  Compact table - */
 table#job-table,
 .table-container table {
   border-collapse: collapse !important;
@@ -454,7 +550,7 @@ table#job-table,
   vertical-align: middle !important;
 }
 
-/* Tabular figures so digits stack under each other. */
+/* Tabular figures so digits stack column-on-column. */
 .cell-total,
 .cell-passed,
 .cell-failed,
@@ -467,11 +563,8 @@ table#job-table,
   font-feature-settings: "tnum" 1;
 }
 
-/* Centre-align numeric columns so values sit under their centred
- * column headers (TOTAL, PASSED, FAILED, SKIPPED, ERRORS).  These
- * columns are only ~50px wide — too narrow for right-alignment to
- * stack digits meaningfully, and the mismatch between centred header
- * and right-aligned value made the table look misaligned. */
+/* Centre numeric columns to match the centred headers. They're too narrow
+ * (~50px) for right-alignment to read as deliberate. */
 .cell-total,
 .cell-passed,
 .cell-failed,
@@ -481,7 +574,7 @@ table#job-table,
 }
 
 
-/* ---- Sticky table header ----------------------------------------------- */
+/*  Sticky table header --- */
 .table-container {
   position: relative;
 }
@@ -537,7 +630,7 @@ table#job-table,
 }
 
 
-/* ---- Column header wrap (don't clip) ----------------------------------- */
+/*  Column header wrap (don't clip) --- */
 #job-table thead .th-sort-label {
   overflow: visible !important;
   text-overflow: clip !important;
@@ -545,15 +638,15 @@ table#job-table,
   line-height: 1.2;
 }
 
-/* Metric headers ("Skipped"/"Errors") in a 50px column — shrink the label
- * font so it fits on one line. */
+/* Shrink metric-column header labels so "Skipped"/"Errors" fit on one line
+ * inside the narrow 50px column. */
 #job-table thead .col-metric .th-sort-label {
   font-size: 11px !important;
   letter-spacing: 0.3px;
 }
 
 
-/* ---- Log-analysis cell: full text, wrapping ---------------------------- */
+/*  Log-analysis cell: full text, wrapping  */
 .cell-log-analysis .rec-chip,
 .cell-log-analysis .log-analysis-chip,
 .cell-log-analysis [class*="-chip"] {
@@ -579,7 +672,7 @@ table#job-table,
 }
 
 
-/* ---- Promo summary strip (solid-fill status pills) --------------------- */
+/*  Promo summary chips (solid-fill, one per release bucket) -- */
 .promo-summary-chip {
   border-radius: 0 !important;
   border: 0 !important;
@@ -614,9 +707,9 @@ table#job-table,
 }
 
 
-/* ---- Compact `.ops-badge` count pill ----------------------------------- */
-/* Override the catch-all sweep so "Failures 2" and "Rerun Selected (N)"
- * stay small, round, and vertically centred inside the host button. */
+/*  Compact `.ops-badge` count pill --- */
+/* Keep button counts ("Failures 2", "Rerun Selected (N)") small and round,
+ * overriding the catch-all rectangular pill normaliser. */
 button .ops-badge,
 .cfg-btn .ops-badge,
 .ops-btn .ops-badge,
@@ -643,8 +736,8 @@ button .ops-badge.ops-badge-danger {
 }
 
 
-/* ---- Header status chip (READY / FETCHING / ERROR) --------------------- */
-/* Rounded pill on the dark header bar; flex layout centres dot + label. */
+/*  Header status chip (READY / FETCHING / ERROR) - */
+/* Rounded pill on the dark header. Per-state tints below for contrast. */
 .app-header .header-status-chip {
   display: flex !important;
   align-items: center !important;
@@ -670,7 +763,7 @@ button .ops-badge.ops-badge-danger {
   border: 0 !important;
 }
 
-/* Per-state tints sit on the black header — bolder than usual for contrast. */
+/* Brighter per-state tints — needed to read against the black header. */
 .app-header .header-status-chip.status--connected {
   border-color: rgba(0, 112, 60, 0.4) !important;
   background: rgba(0, 112, 60, 0.18) !important;
@@ -699,9 +792,9 @@ button .ops-badge.ops-badge-danger {
 }
 
 
-/* ---- Promo category filter tags ("Not Run (5)" etc.) -------------------- */
-/* Outlined pill so users can tell these are interactive checkboxes (vs the
- * solid status pills above). Fills solid on :checked. */
+/*  Promo category filter tags ("Not Run (5)" etc.)  */
+/* Outlined to signal "interactive checkbox" (vs the solid status chips above).
+ * Fills solid on :checked. */
 .promo-cat-tag {
   display: inline-flex !important;
   align-items: center !important;
@@ -740,9 +833,8 @@ button .ops-badge.ops-badge-danger {
 }
 
 
-/* ---- `.badge-rerun` — TRIGGERED metadata under the primary status ------ */
-/* Small rounded pill stacked below the primary status badge. Visibly
- * subordinate (10px vs 12px) so the eye reads primary status first. */
+/*  TRIGGERED metadata pill (below the primary status)  */
+/* Smaller (10px) than the status badge so primary status reads first. */
 .cell-status .badge-rerun,
 .badge-rerun {
   display: block !important;
@@ -782,8 +874,8 @@ button .ops-badge.ops-badge-danger {
 }
 
 
-/* ---- Auto-refresh: row flash + toolbar toggle -------------------------- */
-/* 1.6s yellow pulse when the background poller detects a status change. */
+/*  Auto-refresh: row flash + toolbar toggle -- */
+/* 1.6s yellow pulse on rows whose status changed during a background poll. */
 @keyframes auto-refresh-row-flash {
   0% {
     background-color: var(--theme-yellow);
@@ -805,7 +897,7 @@ tr.row-auto-refresh-flash>td {
   animation: auto-refresh-row-flash 1.6s ease-out 1;
 }
 
-/* Toggle button: ON = solid green, OFF = outlined grey. */
+/* ON = solid green. OFF rule below keeps the brutalist shell. */
 #btn-auto-refresh.auto-refresh-on {
   background: var(--theme-green) !important;
   color: var(--theme-white) !important;
@@ -813,11 +905,13 @@ tr.row-auto-refresh-flash>td {
   box-shadow: 0 2px 0 #002d18 !important;
 }
 
+/* OFF: keep the black-bordered secondary shell so the toggle reads as
+ * "available but inactive", not disabled. */
 #btn-auto-refresh.auto-refresh-off {
-  background: var(--theme-white) !important;
-  color: var(--theme-dark-grey) !important;
-  border: 2px solid var(--theme-mid-grey) !important;
-  box-shadow: 0 2px 0 var(--theme-mid-grey) !important;
+  background: var(--theme-light-grey) !important;
+  color: var(--theme-black) !important;
+  border: 2px solid var(--theme-black) !important;
+  box-shadow: 0 2px 0 var(--theme-black) !important;
 }
 
 #btn-auto-refresh:hover {
@@ -825,10 +919,9 @@ tr.row-auto-refresh-flash>td {
 }
 
 
-/* ---- Row selection (selection-enhancements.js) ------------------------- */
-/* Pointer cursor hints that the whole row is clickable.
- * .row-selected adds a 4px theme-blue left bar.
- * user-select: none stops shift+click from leaving a text-selection rect. */
+/*  Row selection (selection-enhancements.js) - */
+/* Whole row is clickable. .row-selected paints a 4px blue left bar; the
+ * user-select rule keeps shift-click from leaving a text-selection rect. */
 #job-table tbody tr[data-job-id]:not(.detail-row) {
   cursor: pointer;
   user-select: none;
@@ -856,7 +949,7 @@ tr.row-auto-refresh-flash>td {
   color: var(--theme-blue) !important;
 }
 
-/* Count pill next to each "Select … (N)" dropdown item. */
+/* (N) count next to each "Select …" dropdown entry. */
 .ops-dropdown-count {
   margin-left: 6px;
   color: var(--theme-dark-grey);
@@ -864,7 +957,7 @@ tr.row-auto-refresh-flash>td {
   font-size: 11px;
 }
 
-/* Ctrl/Cmd held → "cell" cursor signals paint-select is armed. */
+/* Cmd/Ctrl held: cursor changes to "cell" to signal paint-select is armed. */
 body.paint-select-armed #job-table tbody tr[data-job-id]:not(.detail-row),
 body.paint-select-armed #job-table tbody tr[data-job-id]:not(.detail-row) * {
   cursor: cell !important;

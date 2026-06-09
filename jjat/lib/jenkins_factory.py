@@ -1,20 +1,15 @@
 """Factory for :class:`JenkinsClient` instances from a request body.
 
-Every route handler that needs to talk to Jenkins extracts the same
-three fields (``jenkins_url``, ``username``, ``api_token``) and passes
-the same ``timeout`` / ``pool_size`` choices.  Centralising the
-construction here removes ten near-identical call sites and ensures
-new defaults (e.g. retry policy) take effect everywhere at once.
+Every Jenkins-talking route reads the same three fields; centralising
+construction here means new defaults (timeouts, retries, etc.) take
+effect everywhere at once.
 """
 
 from typing import Optional
 
 from jjat.jenkins_client import JenkinsClient
 
-# Safe default pool size when a caller doesn't specify.  Routes that
-# drive the orchestrator's thread pool (fetch / refresh streams) pass a
-# pool_size matching ``max_workers`` so HTTP concurrency keeps pace with
-# Python thread concurrency; everyone else gets this conservative cap.
+# Conservative default for routes that don't drive the orchestrator's thread pool.
 _DEFAULT_POOL_SIZE = 32
 
 
@@ -26,21 +21,10 @@ def make_client(
 ) -> JenkinsClient:
     """Build a :class:`JenkinsClient` from a route's request-body dict.
 
-    ``pool_size`` should be at least as large as the orchestrator's
-    ``max_workers`` — otherwise requests' urllib3 pool (default 10)
-    will silently serialise threads beyond that limit.  Callers in the
-    SSE fetch / refresh paths pass the configured worker count; lighter
-    routes can leave it ``None`` and get the safe default.
-
-    Args:
-        data: Request body containing ``jenkins_url``, ``username``,
-            ``api_token``.  Already passed through
-            :func:`jjat.lib.credentials.resolve_credentials`.
-        timeout: Per-request HTTP timeout in seconds.
-        pool_size: Maximum concurrent HTTP connections.
-
-    Returns:
-        A configured :class:`JenkinsClient` ready to use.
+    ``pool_size`` must be at least as large as the orchestrator's
+    ``max_workers`` — urllib3's default (10) would otherwise serialise
+    threads beyond that. Routes in the SSE fetch / refresh paths pass
+    the configured worker count; lighter routes can leave it ``None``.
     """
     return JenkinsClient(
         base_url=data["jenkins_url"],

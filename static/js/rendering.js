@@ -1,24 +1,18 @@
-// Jenkins Dashboard rendering module — generates HTML for job table rows and status labels.
-// Extracted from dashboard.html for maintainability and reusability.
+// rendering.js — HTML for job table rows, expanded detail rows, and status labels.
 'use strict';
 
-// Renders a checkbox cell for job selection in the table.
 function renderCheckboxCell(job) {
     return `<td class="checkbox-cell"><input type="checkbox" data-action="select" aria-label="Select job"></td>`;
 }
 
-// Renders the job name as a clickable link to its Jenkins page.
+// Job name as a link to its Jenkins page; full path on the title attribute for hover recovery.
 function renderJobNameCell(job) {
-    return `<td class="job-name-cell cell-job-name"><a href="${escapeHtml(job.url)}" target="_blank">${escapeHtml(job.name)}</a></td>`;
+    const fullName = job.full_name || job.name || '';
+    return `<td class="job-name-cell cell-job-name"><a href="${escapeHtml(job.url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(fullName)}">${escapeHtml(job.name)}</a></td>`;
 }
 
-// Renders the Trend cell — a 5-square mini timeline of the job's last
-// 5 build statuses, oldest on the left, newest on the right.  Each
-// square is colour-coded by status and carries a hover tooltip with
-// the build number + status + relative date.
-//
-// `recent_builds` arrives in newest-first order from the backend; we
-// reverse it so the eye reads left→right as the chronology.
+// 5-square mini timeline of the job's last 5 build statuses (oldest left → newest right).
+// recent_builds comes newest-first from the backend; we reverse so the eye reads chronologically.
 const _SPARK_STATUS_CLASS = {
     'SUCCESS':     'spark-pass',
     'FAILURE':     'spark-fail',
@@ -33,15 +27,14 @@ const _SPARK_SLOTS = 5;
 function renderSparklineCell(job) {
     const builds = Array.isArray(job.recent_builds) ? job.recent_builds.slice(0, _SPARK_SLOTS) : [];
     if (!builds.length) {
-        // No recent_builds yet (Stage 1 still running) — render empty slots.
+        // No recent_builds yet (Stage 1 still running) — empty slots.
         let placeholder = '';
         for (let i = 0; i < _SPARK_SLOTS; i++) placeholder += '<span class="spark-cell spark-empty"></span>';
         return `<td class="cell-trend"><span class="sparkline">${placeholder}</span></td>`;
     }
 
-    // Newest-first → oldest-first so the chronology reads left to right.
     const ordered = builds.slice().reverse();
-    // Pad to 5 with empties on the LEFT (older blanks) when the job is new.
+    // Pad short histories with empties on the LEFT (older = blank) for new jobs.
     while (ordered.length < _SPARK_SLOTS) ordered.unshift(null);
 
     const cells = ordered.map(b => {
@@ -56,7 +49,7 @@ function renderSparklineCell(job) {
 }
 
 
-// Renders test metric columns (total, passed, failed, skipped, errors) with appropriate CSS classes.
+// Test metric columns (total / passed / failed / skipped / errors) with status colours.
 function renderMetricCells(hasMetrics, errors, total, passed, failed, skipped, sourceTag, diag) {
     const dashTip = diag
         ? ` title="No counts available — ${escapeHtml(diag)}"`
@@ -69,7 +62,7 @@ function renderMetricCells(hasMetrics, errors, total, passed, failed, skipped, s
         + `<td class="cell-errors cell-metric">${hasMetrics ? renderMetricValue(errors, hasMetrics, 'cell-metric-danger')  : dash}</td>`;
 }
 
-// Maps build status to a CSS class for styling the console log icon (color-coded by status).
+// Map build status to a CSS class so the console log icon picks up the right colour.
 function _clgStatusClass(status) {
     switch (status) {
         case 'SUCCESS':     return ' clg-passed';
@@ -80,7 +73,7 @@ function _clgStatusClass(status) {
     }
 }
 
-// Renders a console log button icon with error count badge if present.
+// Console-log button with optional error-count badge.
 function renderConsoleLogBtn(job) {
     const hasEvidence = job.failure_evidence && job.failure_evidence.error_count > 0;
     const logIcon = `<svg width="14" height="14"><use href="#icon-file-text"/></svg>`;
@@ -92,16 +85,16 @@ function renderConsoleLogBtn(job) {
     return `<span class="icon icon-console-log${errLabel}${statusCls}" data-action="console-log" role="button" tabindex="0" aria-label="View console log" title="${title}">${logIcon}</span>`;
 }
 
-// Renders action buttons for a job row: console log (with special handling for running builds), rerun, and refresh.
+// Per-row actions: console log (with special handling for IN_PROGRESS builds), rerun, refresh.
 function renderActionsCell(job) {
     const isRunning = job.is_running || job.latest_status === 'IN_PROGRESS';
     const rerunDisabled = isRunning ? ' title="Cannot rerun — build in progress"' : ' title="Rerun"';
     const rerunCls = isRunning ? ' icon-disabled' : '';
     const logIcon = `<svg width="14" height="14"><use href="#icon-file-text"/></svg>`;
 
-    // Console log button: available for all statuses, color-coded
     let consoleBtn;
     if (isRunning) {
+        // While a build runs, show the previous build's analysis status colour if available.
         const ref = job.analysis_reference;
         if (ref && ref.status) {
             const errLabel = (job.failure_evidence && job.failure_evidence.error_count > 0) ? ' has-errors' : '';
@@ -121,8 +114,7 @@ function renderActionsCell(job) {
         + `</div></td>`;
 }
 
-// Domain-to-color map for log analysis label chips, loaded from /api/config at startup.
-// Defaults shown here are used until server config arrives.
+// Domain → chip colour for log-analysis labels. Defaults below are used until /api/config arrives.
 const _domainColorMap = {
     "API / Backend Service": "blue",
     "Environment / Infrastructure": "orange",
@@ -134,7 +126,7 @@ const _domainColorMap = {
     "Unknown": "gray",
 };
 
-// Fallback labels for jobs with no classification or in special states.
+// Fallback chip labels for jobs with no classification or in special states.
 const _fallbackLabels = {
     no_console_log: "No Console Data",
     no_pattern_match: "Unclassified Failure",
@@ -143,8 +135,7 @@ const _fallbackLabels = {
     aborted: "Build Aborted",
 };
 
-// Updates domain-to-color and fallback label maps from server-provided taxonomy config.
-// Called once after /api/config loads to customize labels and colors.
+// Apply server-provided taxonomy overrides to the local maps (called once at startup).
 function applyAnalysisTaxonomy(taxonomy) {
     if (taxonomy && taxonomy.domain_colors) {
         Object.assign(_domainColorMap, taxonomy.domain_colors);
@@ -154,19 +145,18 @@ function applyAnalysisTaxonomy(taxonomy) {
     }
 }
 
-// Maximum number of label chips to show inline before overflow indicator.
+// Visible chips before the "+N more" overflow toggle kicks in.
 const MAX_VISIBLE_CHIPS = 5;
 
-// Color-to-hex map for rendering colored dots in tooltip overflow list.
+// Colour name → hex, used by the autocomplete dropdown dots.
 const _dotHexMap = {
     gray: '#94A3B8', blue: '#3B82F6', orange: '#F97316', purple: '#A855F7',
     teal: '#14B8A6', amber: '#F59E0B', slate: '#64748B', indigo: '#6366F1'
 };
 
-// Renders log analysis label chips for a job, supporting both multi-label and single-label modes.
-// Shows up to MAX_VISIBLE_CHIPS inline, with overflow hidden in a tooltip.
+// Render log-analysis chips (multi- or single-label) with "+N more" overflow expansion.
 function renderLogAnalysisChips(classification, jobStatus) {
-    // Passing / running / aborted jobs with no classification → fallback label
+    // No classification: render the appropriate fallback label for the status.
     if (!classification || (!classification.label && !(classification.all_labels && classification.all_labels.length))) {
         if (jobStatus === 'SUCCESS') return '<span class="text-muted">—</span>';
         if (jobStatus === 'IN_PROGRESS') return _renderChipHtml(_fallbackLabels.in_progress || 'Build Running', 'gray', '');
@@ -174,7 +164,7 @@ function renderLogAnalysisChips(classification, jobStatus) {
         return '<span class="text-muted">—</span>';
     }
 
-    // Build unified label list (multi-label or single-label fallback)
+    // Unify the multi-label and single-label cases into one entries[] list.
     var entries = [];
     var labels = classification.all_labels;
     if (labels && labels.length > 0) {
@@ -187,45 +177,45 @@ function renderLogAnalysisChips(classification, jobStatus) {
         entries = [{ label: lbl, color: _domainColorMap[dom] || 'gray', tip: classification.action || '' }];
     }
 
-    // Single chip — no wrapper needed
     if (entries.length <= 1) {
         return _renderChipHtml(entries[0].label, entries[0].color, entries[0].tip);
     }
 
-    // Multiple chips — show up to MAX_VISIBLE_CHIPS inline, overflow the rest
+    // Render the first MAX_VISIBLE_CHIPS inline; the rest are CSS-hidden via
+    // .rec-chip-overflow-hidden until the user clicks the "+N more" toggle
+    // (delegated handler in app.js flips an .is-expanded class on the wrapper).
     var visible = entries.slice(0, MAX_VISIBLE_CHIPS);
     var overflow = entries.slice(MAX_VISIBLE_CHIPS);
-    var html = '<div class="rec-chip-row">';
+    var html = '<div class="rec-chip-row" data-count="' + entries.length + '">';
     visible.forEach(function(e) {
         html += _renderChipHtml(e.label, e.color, e.tip);
     });
+    overflow.forEach(function(e) {
+        html += _renderChipHtml(e.label, e.color, e.tip, 'rec-chip-overflow-hidden');
+    });
 
     if (overflow.length > 0) {
-        html += '<span class="rec-chip-overflow">+' + overflow.length + ' more';
-        // Tooltip lists only the hidden overflow labels by name
-        html += '<span class="rec-chip-tooltip">';
-        overflow.forEach(function(e) {
-            var hex = _dotHexMap[e.color] || '#94A3B8';
-            html += '<span class="rec-chip-tooltip-item">'
-                  + '<span class="rec-chip-tooltip-dot" style="background:' + hex + '"></span>'
-                  + escapeHtml(e.label)
-                  + '</span>';
-        });
-        html += '</span></span>';
+        // type="button" prevents accidental form submits in case of future wrapping.
+        html += '<button type="button" class="rec-chip-overflow"'
+              + ' data-action="toggle-overflow"'
+              + ' data-count-collapsed="+' + overflow.length + ' more"'
+              + ' data-count-expanded="× less"'
+              + ' aria-expanded="false">+' + overflow.length + ' more</button>';
     }
 
     html += '</div>';
     return html;
 }
 
-// Helper: renders a single label chip with color, label text, and optional tooltip.
-function _renderChipHtml(label, color, tooltip) {
+// One label chip; extraClass='rec-chip-overflow-hidden' marks it hidden until expansion.
+function _renderChipHtml(label, color, tooltip, extraClass) {
     const safeLabel = escapeHtml(label);
     const safeTip = escapeHtml(tooltip);
-    return `<span class="rec-chip rec-chip--${color}" title="${safeTip}"><span class="rec-chip-dot"></span>${safeLabel}</span>`;
+    const cls = 'rec-chip rec-chip--' + color + (extraClass ? ' ' + extraClass : '');
+    return `<span class="${cls}" title="${safeTip}"><span class="rec-chip-dot"></span>${safeLabel}</span>`;
 }
 
-// Tiny marker appended to the Total cell.
+// "(prev)" marker appended to the Total cell when counts came from the prior build.
 function metricsSourceTag(m) {
     if (m && m.from_previous_build) {
         return '<span class="cell-metrics-from-prev" title="Counts from the previous completed build — the current run is still in-flight or was aborted.">(prev)</span>';
@@ -233,7 +223,7 @@ function metricsSourceTag(m) {
     return '';
 }
 
-// Renders a complete job table row with all cells: checkbox, name, status, actions, metrics, and analysis chips.
+// Build a complete <tr> for the job: checkbox, name, status, actions, metrics, trend, chips.
 function renderJobRow(job) {
     const tr = document.createElement('tr');
     tr.setAttribute('data-job-id', job.job_id);
@@ -241,14 +231,15 @@ function renderJobRow(job) {
 
     const statusBadge = renderStatusBadge(job.latest_status);
 
-    // Per-job test metric columns
+    // Per-job test metrics — extractJobMetrics is the single source of truth.
+    const snap = extractJobMetrics(job);
+    const hm = snap.hasMetrics;
+    const totalCount   = hm ? snap.total   : '—';
+    const passedCount  = hm ? snap.passed  : '—';
+    const failedCount  = hm ? snap.failed  : '—';
+    const errorsCount  = hm ? snap.errors  : '—';
+    const skippedCount = hm ? snap.skipped : '—';
     const m = job.test_metrics || {};
-    const hm = hasUsableMetrics(m);
-    const totalCount = hm ? effectiveTotal(m) : '—';
-    const passedCount = hm ? (m.passed || 0) : '—';
-    const failedCount = hm ? (m.failed || 0) : '—';
-    const errorsCount = hm ? (m.errors || 0) : '—';
-    const skippedCount = hm ? (m.skipped || 0) : '—';
     const sourceTag = metricsSourceTag(m);
     const diag = m.metrics_diagnostic || '';
 
@@ -269,17 +260,24 @@ function renderJobRow(job) {
         + `<td class="cell-log-analysis">${recChipHtml}</td>`
         + `<td class="col-expand hidden"><span class="icon icon-expand" data-action="expand" role="button" tabindex="0" aria-label="Expand details">▶</span></td>`;
 
-    // Respect current view mode for new rows arriving during fetch
+    // Respect current view mode for rows that arrive while streaming.
     if (appState.viewMode === 'detail') {
         tr.classList.add('detail-mode');
+    }
+
+    // Register in the rowEls perf cache for O(1) lookups (streaming enrichment,
+    // filters, auto-refresh flash, promotion recompute).
+    if (window.appState && appState.rowEls) {
+        appState.rowEls.set(job.job_id, tr);
     }
 
     return tr;
 }
 
-// Updates an existing job row's cells with new job data (status, metrics, timestamps, classification, etc.).
+// Update an existing row in place: status, metrics, sparkline, exec time, regression, classification, actions.
 function updateJobRow(jobId, job) {
-    const row = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}"]`);
+    const row = (appState.rowEls && appState.rowEls.get(jobId))
+        || document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}"]`);
     if (!row) return;
 
     row.setAttribute('data-status', job.latest_status);
@@ -287,26 +285,24 @@ function updateJobRow(jobId, job) {
     const statusCell = row.querySelector('.cell-status');
     if (statusCell) statusCell.innerHTML = renderStatusBadge(job.latest_status);
 
-    // Update per-job test metric columns
-    const m = job.test_metrics || {};
-    const hm = hasUsableMetrics(m);
-    const sourceTag = metricsSourceTag(m);
+    const snap = extractJobMetrics(job);
+    const hm = snap.hasMetrics;
+    const sourceTag = metricsSourceTag(job.test_metrics || {});
 
     const metricCellUpdates = [
-        ['.cell-errors',  hm ? (m.errors  || 0) : null, 'cell-metric-danger'],
-        ['.cell-passed',  hm ? (m.passed  || 0) : null, 'cell-metric-success'],
-        ['.cell-failed',  hm ? (m.failed  || 0) : null, 'cell-metric-danger'],
-        ['.cell-skipped', hm ? (m.skipped || 0) : null, 'cell-metric-warning'],
+        ['.cell-errors',  hm ? snap.errors  : null, 'cell-metric-danger'],
+        ['.cell-passed',  hm ? snap.passed  : null, 'cell-metric-success'],
+        ['.cell-failed',  hm ? snap.failed  : null, 'cell-metric-danger'],
+        ['.cell-skipped', hm ? snap.skipped : null, 'cell-metric-warning'],
     ];
     for (const [sel, val, cls] of metricCellUpdates) {
         const cell = row.querySelector(sel);
         if (cell) cell.innerHTML = renderMetricValue(val, hm, cls);
     }
     const totalCell = row.querySelector('.cell-total');
-    if (totalCell) totalCell.innerHTML = hm ? effectiveTotal(m) + sourceTag : '—';
+    if (totalCell) totalCell.innerHTML = hm ? (snap.total + sourceTag) : '—';
 
-    // Trend sparkline — rebuild from the latest recent_builds window so
-    // refreshes / re-runs surface new build statuses immediately.
+    // Rebuild the trend sparkline so refreshes / re-runs surface new statuses immediately.
     const trendCell = row.querySelector('.cell-trend');
     if (trendCell) {
         const tmp = document.createElement('tr');
@@ -318,7 +314,7 @@ function updateJobRow(jobId, job) {
     const execTimeCell = row.querySelector('.cell-exec-time');
     if (execTimeCell) execTimeCell.innerHTML = formatExecTime(job.last_execution_time);
 
-    // Update regression status cell if promotion time is active
+    // Regression column is only present while promotion time is active.
     const regCell = row.querySelector('.cell-regression');
     if (regCell) {
         const pt = getPromotionTime();
@@ -330,10 +326,9 @@ function updateJobRow(jobId, job) {
     const recCell = row.querySelector('.cell-log-analysis');
     if (recCell) recCell.innerHTML = renderLogAnalysisChips(job.classification, job.latest_status);
 
-    // Rebuild actions cell using the same renderer as renderJobRow
     const actionsCell = row.querySelector('.cell-actions');
     if (actionsCell) {
-        // renderActionsCell returns <td>...</td> — extract its innerHTML
+        // renderActionsCell returns a full <td>…</td>; extract its innerHTML.
         const tmp = document.createElement('tr');
         tmp.innerHTML = renderActionsCell(job);
         const newActions = tmp.querySelector('.cell-actions');
@@ -342,11 +337,10 @@ function updateJobRow(jobId, job) {
 
     checkStaleRow(row, jobId);
 
-    // Refresh promotion panel counts when a job status changes
     if (appState.promotionTime) updatePromotionPanel(appState.promotionTime);
 }
 
-// Renders an expandable detail row showing job classification, evidence, metrics, and other metadata.
+// Expanded detail row with classification, evidence, secondary hint, and matched rule.
 function renderExpandedDetail(job) {
     const tr = document.createElement('tr');
     tr.className = 'detail-row visible';

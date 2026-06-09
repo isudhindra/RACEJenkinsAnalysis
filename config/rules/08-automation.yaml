@@ -1,9 +1,6 @@
-# ─── Automation / Framework rules ─────────────────────────────────────────
-# Cucumber-runner specifics (pending / undefined / ambiguous steps) and
-# the low-priority catch-alls at the bottom (cucumber_step_failed, NPE,
-# generic Exception/Error).  The three catch-alls live at priorities
-# 700-900 so any specific match in a higher-priority file always wins.
-# Priority band: 30-34 + 700-900.
+# Test framework problems — missing step definitions, undefined steps,
+# and generic last-resort catch-alls for failures no other rule matched.
+# The catch-alls run last so specific matches always take priority.
 
 rules:
   - name: "cucumber_pending"
@@ -42,7 +39,7 @@ rules:
     action: "Multiple step definitions match the same Gherkin step. Tighten one of the regex/expressions."
     scope: "global"
 
-  # ───── Catch-alls (priority ≥ 700) ─────
+  # ─ Catch-alls (priority ≥ 700) ─
   # These match very generic patterns so anything specific in another
   # file beats them.  Keep priorities in 700-999 reserved for fallbacks
   # of this kind.

@@ -1,9 +1,4 @@
-"""Console-log fetching.
-
-Single endpoint that proxies Jenkins's ``consoleText`` so the frontend
-Console Log Viewer doesn't have to hold a Jenkins API token in the
-browser.
-"""
+"""Console-log proxy — keeps the Jenkins API token out of the browser."""
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
@@ -16,18 +11,7 @@ bp = Blueprint("console", __name__)
 
 @bp.route("/api/console-log", methods=["POST"])
 def get_console_log():
-    """Fetch the full console log for a specific build.
-
-    Expects:
-        ``{"job_url", "build_number", "jenkins_url", "username", "api_token"}``
-
-    Returns:
-        Full console text as ``text/plain``.  The frontend streams the
-        body chunk-by-chunk into the Console Log Viewer.
-
-    Credentials are resolved via :func:`resolve_credentials` (supports
-    env-auth).
-    """
+    """Fetch the full console log for a specific build as text/plain."""
     data = resolve_credentials(request.get_json())
     job_url = (data.get("job_url") or "").strip()
     build_number = data.get("build_number")

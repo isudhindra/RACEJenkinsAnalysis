@@ -1,17 +1,9 @@
-"""Server-Sent Events pipeline shared by /api/fetch/stream and
-/api/refresh/stream.
+"""SSE pipeline shared by ``/api/fetch/stream`` and ``/api/refresh/stream``.
 
-The two route handlers differ only in:
-* whether they clear :data:`jjat.lib.state.job_store` at start, and
-* how rich the ``fetch_complete`` summary payload is.
-
-Everything else — the Stage 1 → Stage 2 orchestration, event queue,
-operation-cancellation check, JSON-event serialisation — is identical
-and lives here.  Routes use :func:`stream_full_fetch` /
-:func:`stream_selective_refresh` as their generator function.
-
-This module is named with a leading underscore because nothing outside
-the :mod:`jjat.routes` package should import from it.
+The two routes differ only in whether they clear ``state.job_store``
+on entry and how rich the ``fetch_complete`` payload is. Everything
+else — Stage 1 → Stage 2 orchestration, event queue, cancellation,
+serialisation — lives here.
 """
 
 import queue
@@ -34,21 +26,17 @@ from jjat.models import (
 from jjat.pipeline import AnalysisOrchestrator
 
 
-# Sentinel value enqueued by the producer thread after it finishes (success
-# or exception).  The consumer treats this as the authoritative
-# stream-complete signal — replaces the previous
-# ``while thread.is_alive() or not queue.empty()`` pattern, which had a
-# race: a thread could exit between the timeout-blocked get() and the
-# is_alive() re-check, causing the final batch of events to be dropped.
+# Sentinel pushed onto the queue when the producer finishes, so the
+# consumer never blocks waiting for events that will never come.
 _STREAM_END = object()
 
 
 def _run_producer_with_sentinel(target, args, event_queue: "queue.Queue") -> threading.Thread:
-    """Spawn *target* on a daemon thread; guarantee *_STREAM_END* enqueued.
+    """Spawn *target* on a daemon thread; always enqueue _STREAM_END afterwards.
 
-    The wrapping try/finally ensures the sentinel is queued even if the
-    producer raises — without it, an unhandled exception would leave the
-    consumer waiting indefinitely on an empty queue.
+    The try/finally guarantees the sentinel reaches the consumer even
+    when the producer raises — otherwise the consumer would block on an
+    empty queue indefinitely.
     """
     def _runner():
         try:
@@ -66,12 +54,7 @@ def stream_full_fetch(
     orchestrator: AnalysisOrchestrator,
     jobs: List[Dict[str, str]],
 ):
-    """Generator for the full-fetch SSE stream (``/api/fetch/stream``).
-
-    Clears :data:`state.job_store` before Stage 1 and emits a rich
-    ``fetch_complete`` payload with total / failed / unstable /
-    classified counts at the end.
-    """
+    """Full-fetch SSE generator — clears store, emits rich completion summary."""
     yield from _stream_pipeline(
         operation_id,
         orchestrator,
@@ -86,13 +69,7 @@ def stream_selective_refresh(
     orchestrator: AnalysisOrchestrator,
     jobs: List[Dict[str, str]],
 ):
-    """Generator for the selective-refresh SSE stream
-    (``/api/refresh/stream``).
-
-    Does NOT clear :data:`state.job_store` — entries are updated in
-    place.  Emits a minimal ``fetch_complete`` payload (total + duration
-    only).
-    """
+    """Selective-refresh SSE generator — updates the store in place, minimal summary."""
     yield from _stream_pipeline(
         operation_id,
         orchestrator,
@@ -119,17 +96,15 @@ def find_record_from_event(
 ) -> Optional[JobRecord]:
     """Retrieve the full :class:`JobRecord` from the orchestrator.
 
-    The orchestrator's ``run_stage_1`` stores complete records (with
-    three_run_context, test_metrics, etc.) in its ``_records`` dict.
-    We prefer that over reconstructing from the serialised payload —
-    reconstruction loses typed fields Stage 2 still needs.
+    Prefer the orchestrator's stored record — reconstructing from the
+    serialised payload loses typed fields Stage 2 still needs.
     """
     try:
         job_url = event.job_id
         if hasattr(orchestrator, "_records") and job_url in orchestrator._records:
             return orchestrator._records[job_url]
 
-        # Fallback: reconstruct from payload (without three_run_context).
+        # Fallback: rebuild a minimal record from the payload (no three_run_context).
         payload = event.payload
         status_str = payload.get("current_status", "UNKNOWN")
         status = BuildStatus(status_str) if status_str in BuildStatus.__members__ else BuildStatus.UNKNOWN
@@ -153,10 +128,6 @@ def find_record_from_event(
         return None
 
 
-# ---------------------------------------------------------------------------
-# Internal: the unified Stage-1 → Stage-2 pipeline driver.
-# ---------------------------------------------------------------------------
-
 def _stream_pipeline(
     operation_id: str,
     orchestrator: AnalysisOrchestrator,
@@ -164,17 +135,11 @@ def _stream_pipeline(
     clear_store: bool = False,
     compute_full_stats: bool = False,
 ):
-    """SSE generator unifying full-fetch and selective-refresh flows.
+    """Unified SSE generator backing both full-fetch and selective-refresh.
 
-    Args:
-        operation_id: UUID for this stream — used to abandon work if a
-            newer operation supersedes this one mid-flight.
-        orchestrator: Pre-configured :class:`AnalysisOrchestrator`.
-        jobs: List of ``{"name": str, "url": str}`` dicts.
-        clear_store: ``True`` for full fetch — clears ``state.job_store``
-            before Stage 1 begins.
-        compute_full_stats: ``True`` for full fetch — computes richer
-            counters for the ``fetch_complete`` event.
+    ``operation_id`` is used to abandon work when a newer fetch
+    supersedes this one. ``clear_store`` + ``compute_full_stats`` are
+    the only knobs that distinguish the two callers.
     """
     if clear_store:
         state.job_store.clear()
@@ -183,10 +148,10 @@ def _stream_pipeline(
     event_queue: queue.Queue = queue.Queue()
 
     def on_result(event: SSEEvent) -> None:
-        """Callback: enqueue SSE events from orchestrator worker threads."""
+        """Enqueue events from orchestrator worker threads."""
         event_queue.put(event)
 
-    # ------------------------------------------------------------------ Stage 1
+    #  Stage 1 --
     stage_1_thread = _run_producer_with_sentinel(
         target=orchestrator.run_stage_1,
         args=(jobs, operation_id, on_result),
@@ -197,19 +162,15 @@ def _stream_pipeline(
 
     while True:
         if operation_id != state.active_operation_id:
-            # Abandoned operation — a newer fetch superseded us.  Signal
-            # the orchestrator to stop consuming new futures (in-flight
-            # workers will exit on their next call).  This stops thread
-            # leakage that used to happen because the executor's context
-            # manager kept blocking on already-submitted futures.
+            # A newer fetch superseded us — cancel the orchestrator so
+            # workers exit on their next call and no further events fire.
             orchestrator.cancel()
             return
 
         try:
             event = event_queue.get(timeout=0.5)
         except queue.Empty:
-            # Just a heartbeat for the cancellation check — the sentinel
-            # is the real terminator, never the timeout.
+            # Heartbeat — only the sentinel actually terminates the loop.
             continue
 
         if event is _STREAM_END:
@@ -242,13 +203,11 @@ def _stream_pipeline(
                 **event.payload,
             })
 
-    # Sentinel already drained — the join is a safety net to ensure the
-    # OS thread is fully reaped before Stage 2 starts.
+    # Sentinel already drained — join just reaps the OS thread before Stage 2.
     stage_1_thread.join(timeout=5.0)
 
-    # ------------------------------------------------------------------ Stage 2
-    # For full fetch: analyse all failed/unstable in state.job_store.
-    # For refresh:    analyse only among records refreshed this round.
+    #  Stage 2 --
+    # Full fetch scans the whole store; refresh stays within this round's records.
     if compute_full_stats:
         failed_records = [
             r for r in state.job_store.values()
@@ -281,8 +240,7 @@ def _stream_pipeline(
                 break
 
             if event.event_type == SSEEventType.JOB_ENRICHED:
-                # The orchestrator mutated the record in place — re-serialise
-                # via to_dict so release_status stays consistent.
+                # Re-serialise via to_dict so release_status reflects the in-place mutation.
                 if event.job_id in state.job_store:
                     yield format_sse({
                         "event_type": "job_enriched",
@@ -305,10 +263,9 @@ def _stream_pipeline(
                     **event.payload,
                 })
 
-        # Sentinel already drained — join is just a safety reap.
         stage_2_thread.join(timeout=5.0)
 
-    # -------------------------------------------------------------- Complete
+    #  Completion summary ---
     duration = time.time() - start_time
 
     if compute_full_stats:

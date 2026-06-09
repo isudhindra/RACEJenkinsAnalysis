@@ -1,15 +1,8 @@
 """Authentication endpoints.
 
-Three endpoints, all small:
-
-* ``POST /api/validate`` — verify user-supplied creds against Jenkins.
-* ``GET  /api/env-credentials-check`` — does the server have env creds?
-* ``POST /api/env-validate`` — verify those env creds against the chosen
-  Jenkins instance.
-
-All return HTTP 200 with ``{"valid": bool, "message": str}`` even on
-auth failure — the frontend interprets the JSON, never the status code.
-HTTP 5xx is reserved for genuine server errors.
+All three return HTTP 200 with ``{"valid": bool, "message": str}``
+even on auth failure — the frontend interprets the JSON, never the
+status code. HTTP 5xx is reserved for genuine server errors.
 """
 
 from flask import Blueprint, current_app, jsonify, request
@@ -42,10 +35,10 @@ def validate_credentials():
 
 @bp.route("/api/env-credentials-check", methods=["GET"])
 def env_credentials_check():
-    """Report whether the server has both env-auth variables set.
+    """Report whether both env-auth variables are set.
 
-    Response includes the env-var names we looked at so the UI can
-    tell the user which variables to populate when creds are missing.
+    Names are included so the UI can tell the user which variables to
+    populate when creds are missing.
     """
     username, api_key = env_credentials()
     return jsonify({

@@ -1,17 +1,14 @@
-// kpi.js — KPI panels and summary-bar metrics.
-// Owns the "Jobs Health" and "Release Validation" number panels,
-// the degraded-mode indicator, the empty-state toggle, and toast notifications.
+// KPI panels (Jobs Health + Release Validation), shared metric helpers,
+// toast notifications, and degraded-data banner.
 'use strict';
 
-// ── Metric helpers ─────────────────────────────────────────────────────
-
-// Safely read a numeric metric field; returns 0 for null, undefined, or negative values.
+// Read a numeric metric field, clamping null/undefined/negatives to 0.
 function safeMetric(m, field) {
     const v = m[field];
     return (typeof v === 'number' && v >= 0) ? v : 0;
 }
 
-// Return true when a test_metrics object contains real data (not unavailable/empty).
+// True when test_metrics has at least one real number (not unavailable/empty).
 function hasUsableMetrics(m) {
     if (!m || m.metrics_unavailable) return false;
     const fields = ['total', 'passed', 'failed', 'skipped', 'errors'];
@@ -22,7 +19,8 @@ function hasUsableMetrics(m) {
     return false;
 }
 
-// Derive the "best" total for display
+// Best-effort total: max(reported total, sum of parts) — covers parsers that
+// under-report `total` but report each part correctly.
 function effectiveTotal(m) {
     if (!m) return 0;
     const partsSum = safeMetric(m, 'passed') + safeMetric(m, 'failed')
@@ -30,34 +28,49 @@ function effectiveTotal(m) {
     return Math.max(safeMetric(m, 'total'), partsSum);
 }
 
-// Walk a list of jobs and sum up their test-case counts (passed, failed, skipped, errors).
-// Uses effectiveRun = max(reported total, sum-of-parts) to handle inconsistent Jenkins data.
-function aggregateTestMetrics(jobs) {
-    let total = 0, passed = 0, failed = 0, skipped = 0, errors = 0, jobsWithTests = 0;
-    for (const job of jobs) {
-        const m = job.test_metrics;
-        if (!m || m.metrics_unavailable) continue;
-        const p = safeMetric(m, 'passed');
-        const f = safeMetric(m, 'failed');
-        const s = safeMetric(m, 'skipped');
-        const e = safeMetric(m, 'errors');
-        const partsSum = p + f + s + e;
-        const effectiveRun = Math.max(safeMetric(m, 'total'), partsSum);
-        if (effectiveRun === 0 && partsSum === 0) continue;
-        jobsWithTests++;
-        total += effectiveRun;
-        passed += p;
-        failed += f;
-        skipped += s;
-        errors += e;
+// Single source of truth for per-job test metric extraction — used by KPIs,
+// table cells, and CSV export so numbers stay consistent across the UI.
+function extractJobMetrics(job) {
+    const m = job && job.test_metrics;
+    if (!m || m.metrics_unavailable) {
+        return { hasMetrics: false, total: 0, passed: 0, failed: 0, skipped: 0, errors: 0 };
     }
-    // Final safety: ensure denominator >= sum-of-parts
-    const gps = passed + failed + skipped + errors;
-    if (total < gps) total = gps;
-    return { total, passed, failed, skipped, errors, jobsWithTests };
+    const passed  = safeMetric(m, 'passed');
+    const failed  = safeMetric(m, 'failed');
+    const skipped = safeMetric(m, 'skipped');
+    const errors  = safeMetric(m, 'errors');
+    const partsSum = passed + failed + skipped + errors;
+    const total = Math.max(safeMetric(m, 'total'), partsSum);
+    const hasMetrics = total > 0 || partsSum > 0;
+    return { hasMetrics, total, passed, failed, skipped, errors };
 }
 
-// Convert raw counts into clamped [0, 100] percentages given a denominator.
+// Fold a per-job snapshot into a running totals bucket.
+function addMetricsBucket(bucket, snap) {
+    bucket.total   += snap.total;
+    bucket.passed  += snap.passed;
+    bucket.failed  += snap.failed;
+    bucket.skipped += snap.skipped;
+    bucket.errors  += snap.errors;
+}
+
+// Sum test-case counts across a job list.
+function aggregateTestMetrics(jobs) {
+    const bucket = { total: 0, passed: 0, failed: 0, skipped: 0, errors: 0 };
+    let jobsWithTests = 0;
+    for (const job of jobs) {
+        const snap = extractJobMetrics(job);
+        if (!snap.hasMetrics) continue;
+        addMetricsBucket(bucket, snap);
+        jobsWithTests++;
+    }
+    // Defensive: denominator must be at least the sum of its parts.
+    const gps = bucket.passed + bucket.failed + bucket.skipped + bucket.errors;
+    if (bucket.total < gps) bucket.total = gps;
+    return { ...bucket, jobsWithTests };
+}
+
+// Counts → [0, 100] percentages against a given denominator.
 function calcPercentages(denominator, parts) {
     const result = {};
     for (const [key, val] of Object.entries(parts)) {
@@ -66,8 +79,7 @@ function calcPercentages(denominator, parts) {
     return result;
 }
 
-// Animate a batch of counter elements to their new numeric values.
-// Accepts an array of [elementId, numericValue] pairs.
+// Animate a batch of counter elements to their new values. Accepts [id, value] pairs.
 function updateCounters(updates) {
     for (const [id, val] of updates) {
         const el = document.getElementById(id);
@@ -78,7 +90,6 @@ function updateCounters(updates) {
     }
 }
 
-// Set a batch of percentage label elements to their new values (e.g. "83.2%").
 function updatePctLabels(updates) {
     for (const [id, pct] of updates) {
         const el = document.getElementById(id);
@@ -86,8 +97,7 @@ function updatePctLabels(updates) {
     }
 }
 
-// Reset every KPI counter and percentage label back to zero.
-// Called when the dashboard state is cleared (e.g. before a new fetch).
+// Reset every KPI counter + percentage back to zero. Called before a fresh fetch.
 function resetAllKPIDisplays() {
     for (const el of document.querySelectorAll('.kpi-metric-val')) {
         if (el._counterRafId) { cancelAnimationFrame(el._counterRafId); el._counterRafId = null; }
@@ -97,7 +107,7 @@ function resetAllKPIDisplays() {
     for (const el of document.querySelectorAll('.kpi-metric-pct')) {
         el.textContent = '0%';
     }
-    // Named subtitle counters that sit outside .kpi-metric blocks
+    // Subtitle counters live outside .kpi-metric blocks — reset them too.
     for (const id of ['summary-total-tests', 'kpi-job-count', 'reg-total-jobs', 'reg-total-tests']) {
         const el = document.getElementById(id);
         if (!el) continue;
@@ -107,10 +117,8 @@ function resetAllKPIDisplays() {
     }
 }
 
-// ── Summary bar ────────────────────────────────────────────────────────
 
-// Recompute and display the top-level "Jobs Health" KPI panel
-// by aggregating test metrics across all loaded jobs.
+// Recompute the "Jobs Health" KPI panel from all loaded jobs.
 function updateSummaryBar() {
     const jobs = Array.from(appState.jobs.values());
     const agg = aggregateTestMetrics(jobs);
@@ -132,7 +140,6 @@ function updateSummaryBar() {
         ['kpi-pct-errors',  pct.errors],
     ]);
 
-    // Update job count in subtitle
     const jobCountEl = document.getElementById('kpi-job-count');
     if (jobCountEl) {
         const jc = appState.jobs.size;
@@ -143,13 +150,12 @@ function updateSummaryBar() {
     updateToolbarActions();
     toggleKpiLayout();
 
-    // Trigger KPI reveal animation when first meaningful data arrives
+    // KPI reveal animation — first paint of meaningful data.
     motionRevealKPI();
 }
 
 
-// Show a warning banner when more than 30% of jobs have incomplete data,
-// indicating that Jenkins may have timed out or been rate-limited.
+// Surface a warning banner when >30% of jobs have incomplete data.
 function checkDegradedMode(jobs) {
     const nonCompleteCount = jobs.filter(j => j.data_completeness && j.data_completeness !== 'COMPLETE').length;
     const pct = jobs.length > 0 ? (nonCompleteCount / jobs.length) * 100 : 0;
@@ -163,11 +169,10 @@ function checkDegradedMode(jobs) {
     }
 }
 
-// ── KPI layout toggle ──────────────────────────────────────────────────
 
-// Switch between single-panel (Jobs Health only) and dual-panel
-// (Jobs Health + Release Validation) layout depending on whether
-// a promotion baseline datetime has been set.
+
+// Toggle between single-panel (Jobs Health) and two-panel (+ Release Validation)
+// layouts depending on whether a promotion time is active.
 function toggleKpiLayout() {
     const container = document.getElementById('kpi-container');
     const promotionTime = getPromotionTime();
@@ -179,14 +184,12 @@ function toggleKpiLayout() {
     }
 }
 
-// Compute and render the Release Validation KPI panel.
-// Categorises each job as validated / needs-rerun / not-run relative to the
-// promotion baseline, then updates the counters and percentages.
+// Render the Release Validation KPI panel.
 function updateRegressionKPI(promotionTime) {
     if (!promotionTime) return;
     const cats = evaluateRegressionCategories(promotionTime);
 
-    // Test-case metrics (mirrors the Jobs Health panel)
+    // Test-case totals (mirrors the Jobs Health panel layout).
     const t = cats.tests;
     const tPct = calcPercentages(t.total, {
         passed: t.passed, failed: t.failed, skipped: t.skipped, errors: t.errors
@@ -206,7 +209,7 @@ function updateRegressionKPI(promotionTime) {
         ['reg-tests-pct-errors',  tPct.errors],
     ]);
 
-    // Job-level validation status (passed / failed / in-progress / not-run)
+    // Job-level validation buckets (passed / failed / in-progress / not-run).
     const jPct = calcPercentages(cats.total, {
         passed: cats.passed.length, failed: cats.failed.length,
         inprog: cats.in_progress.length, notrun: cats.not_executed.length
@@ -227,10 +230,8 @@ function updateRegressionKPI(promotionTime) {
     ]);
 }
 
-// ── Empty state ────────────────────────────────────────────────────────
 
-// Show or hide the "no jobs loaded" / "no results match filter" placeholders
-// depending on whether jobs exist and whether any rows pass the active filters.
+// Toggle the "no jobs loaded" / "no results match filter" placeholders.
 function updateEmptyState() {
     const hasJobs = appState.jobs.size > 0;
     const table = $id('job-table');
@@ -239,7 +240,6 @@ function updateEmptyState() {
         $id('empty-state').classList.add('hidden');
         table.classList.remove('hidden');
         table.style.display = 'table';
-        // Check if all rows are filtered out
         const visibleRows = document.querySelectorAll('tbody tr[data-job-id]:not(.detail-row):not([style*="display: none"])');
         const allFiltered = visibleRows.length === 0;
         const labels = appState.filters.logAnalysisLabels;
@@ -252,10 +252,8 @@ function updateEmptyState() {
     }
 }
 
-// ── Toast notifications ────────────────────────────────────────────────
+//  Toast notifications 
 
-// Display a temporary toast message at the bottom of the screen.
-// Type can be 'info', 'success', 'error', or 'warning'.
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
@@ -265,7 +263,7 @@ function showToast(message, type = 'info') {
     setTimeout(() => {
         toast.classList.add('toast-exit');
         toast.addEventListener('animationend', () => toast.remove(), { once: true });
-        // Safety fallback if animationend doesn't fire
+        // Belt-and-braces in case animationend never fires.
         setTimeout(() => { if (toast.parentNode) toast.remove(); }, 400);
     }, 5000);
 }

@@ -1,10 +1,6 @@
-# ─── Timeout rules ────────────────────────────────────────────────────────
-# Anything where the test or page exceeded its allowed wait window.
-# Priority band: 18-22 (TIER 1 — specific, high-confidence matches).
-#
-# Schema reminder: name, priority, domain, subcategory, impact, label,
-# patterns (list of regexes), action, scope.  Full guide:
-# config/rules/HOW-TO-ADD-A-RULE.md
+# Timeout failures — the test or page took longer than its allowed wait.
+# Often a slow environment or flaky page-load, not a real product bug.
+# See HOW-TO-ADD-A-RULE.md for the rule schema.
 
 rules:
   - name: "selenium_wait_timeout"

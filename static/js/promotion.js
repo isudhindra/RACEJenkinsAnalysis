@@ -1,6 +1,9 @@
+// Promotion / release-validation: per-environment promotion time, regression
+// status per job, summary panel, and Slack/Teams-ready release summary.
 'use strict';
 
-// Map a backend ReleaseStatus enum value onto the legacy panel vocabulary.
+// Translate the backend ReleaseStatus enum into the panel's regression
+// vocabulary. `currentStatus` should be `job.latest_status`.
 function _releaseToRegression(releaseStatus, currentStatus) {
     switch (releaseStatus) {
         case 'PASS':    return 'passed';
@@ -10,16 +13,16 @@ function _releaseToRegression(releaseStatus, currentStatus) {
     }
 }
 
-// Determine if a job has passed validation against a promotion baseline.
+// Has this job passed validation against the promotion baseline?
+// Trusts backend release_status when set; otherwise re-evaluates client-side.
 function deriveRegressionStatus(job, promotionTime) {
     if (!promotionTime || !job) return 'not_executed';
 
-    // ---- Primary: trust the backend if it has spoken.
     if (typeof job.release_status === 'string' && job.release_status !== 'NA') {
-        return _releaseToRegression(job.release_status, job.current_status);
+        return _releaseToRegression(job.release_status, job.latest_status);
     }
 
-    // ---- Fallback: same rule, evaluated client-side.
+    // Fallback when backend hasn't yet computed release_status.
     var seen = {};
     var pool = [];
     function consider(b) {
@@ -51,11 +54,10 @@ function deriveRegressionStatus(job, promotionTime) {
     return 'failed';
 }
 
-// Backwards-compatible no-ops so older call sites that reference the latch
-// cache do not break.  Retire after the dashboard tree is cleaned up.
-function clearValidationCache() { /* no-op: backend is now the source of truth */ }
+// Kept so legacy call sites don't break; backend is now the source of truth.
+function clearValidationCache() { /* no-op */ }
 
-// Generate HTML badge element for a regression status (validated, needs rerun, running, or not run)
+// Render the regression status badge (Validated / Needs Rerun / Running / Not Run).
 function renderRegressionBadge(regressionStatus) {
     switch (regressionStatus) {
         case 'passed':
@@ -70,14 +72,13 @@ function renderRegressionBadge(regressionStatus) {
     }
 }
 
-// Render a table cell containing the regression status badge for a job
 function renderRegressionCell(job) {
     const pt = getPromotionTime();
     const status = deriveRegressionStatus(job, pt);
     return '<td class="cell-regression" data-regression="' + status + '">' + renderRegressionBadge(status) + '</td>';
 }
 
-// Promotion Time Accessors
+//  Promotion time accessors — persisted per environment in sessionStorage 
 
 const _PROMO_STORE_KEY = 'promotion_times';
 
@@ -92,10 +93,9 @@ function _readPromoStore() {
 
 function _writePromoStore(store) {
     try { sessionStorage.setItem(_PROMO_STORE_KEY, JSON.stringify(store)); }
-    catch (_) { /* sessionStorage may be unavailable; ignore */ }
+    catch (_) { /* sessionStorage may be unavailable. */ }
 }
 
-// Persist the current input value under the active environment.
 function _persistCurrentEnvValue(value) {
     const env = _currentEnv();
     if (!env) return;
@@ -105,8 +105,7 @@ function _persistCurrentEnvValue(value) {
     _writePromoStore(store);
 }
 
-// Load the saved promotion value for the active environment into the input.
-// Called by config.js after an environment switch.
+// Restore the per-env promotion value into the input. Called after env switch.
 function loadPromotionTimeForCurrentEnv() {
     const input = document.getElementById('promotion-datetime');
     if (!input) return;
@@ -118,7 +117,7 @@ function loadPromotionTimeForCurrentEnv() {
     applyPromotionTime();
 }
 
-// Get the currently selected promotion datetime from the input field, or null if not set
+// Read the promotion datetime from the input. Returns null when blank or invalid.
 function getPromotionTime() {
     const input = document.getElementById('promotion-datetime');
     if (!input || !input.value) return null;
@@ -126,19 +125,16 @@ function getPromotionTime() {
     return isNaN(d.getTime()) ? null : d;
 }
 
-// Serialize the currently selected promotion time as an ISO-8601 string for
-// the backend.  Returns '' when no time is set.  Single seam used by every
-// fetch payload constructor — keep this and the backend's _parse_promotion_time
-// in lockstep.
+// ISO-8601 serialiser for backend payloads. Single seam used by every
+// fetch — keep this in lockstep with backend's _parse_promotion_time.
 function getPromotionTimeISO() {
     const d = getPromotionTime();
     return d ? d.toISOString() : '';
 }
 
-// Set promotion time to a quick preset (now minus minutesAgo) and apply immediately
+// Quick-preset: set promotion to "now minus N minutes" and apply.
 function setPromoQuick(minutesAgo) {
     const d = new Date(Date.now() - minutesAgo * 60000);
-    // Format as YYYY-MM-DDTHH:MM for datetime-local input
     const pad = n => String(n).padStart(2, '0');
     const val = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
         + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
@@ -147,12 +143,10 @@ function setPromoQuick(minutesAgo) {
     applyPromotionTime();
 }
 
-// Pending-State Management for Manual Date-Time Edits
+//  Pending-state: track unapplied datetime edits so the Apply button shows 
 
-// Track the last-applied promotion value so we can detect if user has unsaved changes
 var _appliedPromoValue = '';
 
-// Mark the datetime input as having a pending (unapplied) change and show the Apply button
 function markPromoPending() {
     var input = document.getElementById('promotion-datetime');
     var applyBtn = document.getElementById('promo-apply-btn');
@@ -166,7 +160,6 @@ function markPromoPending() {
     }
 }
 
-// Clear the pending visual state (remove CSS class and hide Apply button)
 function _clearPromoPending() {
     var input = document.getElementById('promotion-datetime');
     var applyBtn = document.getElementById('promo-apply-btn');
@@ -174,16 +167,16 @@ function _clearPromoPending() {
     if (applyBtn) applyBtn.classList.add('hidden');
 }
 
-// User clicked Apply button — confirm the datetime and trigger recalculation
 function confirmPromoApply() {
     _clearPromoPending();
     applyPromotionTime();
 }
 
-// Core Promotion State Engine
+//  Core promotion engine ─
 
-// Evaluate all jobs and return categorized counts and lists for passed, failed, in-progress, and not-executed statuses
-// Also returns aggregated test metrics (total, passed, failed, skipped, errors) for visualization
+// Bucket every job by regression status and aggregate test metrics
+// per bucket. Buckets contain JOB-ID strings (not job objects) — callers
+// resolve to records via appState.jobs.get(id).
 function evaluateRegressionCategories(promotionTime) {
     const _zeroTests = () => ({ total: 0, passed: 0, failed: 0, skipped: 0, errors: 0 });
     const result = {
@@ -203,54 +196,36 @@ function evaluateRegressionCategories(promotionTime) {
         result[rs].push(jobId);
         result.total++;
 
-        // Only count test metrics from jobs that actually ran after the promotion time
-        // Jobs classified as 'not_executed' have no qualifying runs in the validation window
+        // Only count test metrics from jobs that ran after promotion.
         if (rs === 'not_executed') return;
 
-        const m = job.test_metrics;
-        if (!m || m.metrics_unavailable) return;
-        const p = safeMetric(m, 'passed'), f = safeMetric(m, 'failed');
-        const s = safeMetric(m, 'skipped'), e = safeMetric(m, 'errors');
-        const partsSum = p + f + s + e;
-        const effectiveRun = Math.max(safeMetric(m, 'total'), partsSum);
-        if (effectiveRun === 0 && partsSum === 0) return;
+        const snap = extractJobMetrics(job);
+        if (!snap.hasMetrics) return;
 
         result.jobsWithTests++;
-        // Add metrics to both global and per-category buckets
-        for (const bucket of [result.tests, result.testsByCategory[rs]]) {
-            bucket.total += effectiveRun;
-            bucket.passed += p;
-            bucket.failed += f;
-            bucket.skipped += s;
-            bucket.errors += e;
-        }
+        addMetricsBucket(result.tests, snap);
+        addMetricsBucket(result.testsByCategory[rs], snap);
     });
 
-    // Safety check: total should never be less than sum of parts
+    // Defensive: total must be at least the sum of its parts.
     const gps = result.tests.passed + result.tests.failed + result.tests.skipped + result.tests.errors;
     if (result.tests.total < gps) result.tests.total = gps;
 
     return result;
 }
 
-// Master state updater — called when promotion time changes or jobs refresh.
-// Updates table visibility, summary strip, action buttons, and category checkboxes based on new regression status.
+// Top-level updater: re-derives release_status, repaints table, KPIs, and panel.
+// Called when promotion time changes or after jobs refresh.
 function applyPromotionTime() {
     const promotionTime = getPromotionTime();
 
-    // Remember the applied value for pending-state detection
     var input = document.getElementById('promotion-datetime');
     _appliedPromoValue = input ? input.value : '';
 
-    // Warn (non-blocking) if the user picked a future timestamp.  Backend
-    // compute_release_status() correctly returns PENDING for every job in
-    // that case, but the user just sees "all Not Run" with no explanation
-    // — the toast tells them why.  Suppressed when clearing.
     if (promotionTime && promotionTime.getTime() > Date.now() && typeof showToast === 'function') {
         showToast('Promotion time is in the future — every job will show as Pending until a build runs after it.', 'warning');
     }
 
-    // Persist under the current environment so switching contexts restores it.
     _persistCurrentEnvValue(_appliedPromoValue);
 
     appState.promotionTime = promotionTime;
@@ -260,7 +235,7 @@ function applyPromotionTime() {
     const summaryStrip = document.getElementById('promo-summary-strip');
     const actionRow = document.getElementById('promo-action-row');
 
-    // Show/hide the Release Status filter dropdown alongside the column.
+    // Release Status filter dropdown visibility tracks the column.
     var releaseFilter = document.getElementById('filter-release-status');
     if (promotionTime) {
         table.classList.add('promotion-active');
@@ -276,65 +251,35 @@ function applyPromotionTime() {
             releaseFilter.value = '';
             releaseFilter.classList.add('hidden');
         }
-        // Drop any stored release-status filter so applyFilters() doesn't
-        // continue suppressing rows after the column disappears.
+        // Drop any stored release-status filter so applyFilters() stops
+        // suppressing rows after the column disappears.
         if (appState && appState.filters) appState.filters.releaseStatus = null;
-        // Uncheck category filters when clearing promotion
         const cbNotRun = document.getElementById('promo-cat-notrun');
         const cbFailed = document.getElementById('promo-cat-failed');
         if (cbNotRun) cbNotRun.checked = false;
         if (cbFailed) cbFailed.checked = false;
     }
 
-    // Refresh job.release_status in place using the data already loaded
-    // in the browser — pure JS, no Jenkins round-trip.  Without this,
-    // every job's release_status stays at whatever the original fetch
-    // returned (typically "NA" when promotion wasn't yet set), the
-    // Release-Status filter matches nothing, and the regression badges
-    // and dual-panel KPI render stale values.
     _recomputeAllReleaseStatusInPlace(promotionTime);
-
-    // Recalculate all regression status cells in the table
     recalculateAllRegressionCells(promotionTime);
-    // Adjust colspan for detail rows when promotion column is visible
     updateDetailRowColspan();
-    // Refresh the summary panel and action buttons
     updatePromotionPanel(promotionTime);
-    // Switch KPI layout between single-column (Job Health) and two-column (with Release Validation)
     toggleKpiLayout();
 
-    // Re-run filters so the Release-Status dropdown's visibility change is
-    // reflected in the table.  Without this, clearing promotion (which sets
-    // appState.filters.releaseStatus = null) leaves rows hidden by a
-    // previously-set release filter; and setting promotion fresh keeps any
-    // stale release filter from a saved view active without re-evaluating.
-    if (typeof applyFilters === 'function') applyFilters();
+    // Distinct release_status values may have changed — repopulate the filter
+    // dropdown so it only offers values that exist in the table.
+    if (typeof populateReleaseStatusFilter === 'function') populateReleaseStatusFilter();
 
+    if (typeof applyFilters === 'function') applyFilters();
 }
 
 
-// ── Client-side release_status recompute on promotion change ───────────
-//
-// The backend computes release_status server-side when promotion_time
-// is in the request body, but we don't want to re-pull every job from
-// Jenkins just because the user picked a different baseline.  This
-// helper recomputes release_status purely from data already in the
-// browser (recent_builds + three_run_context) using the *exact* same
-// rule as jjat/models.py compute_release_status.  Pure JS, no network,
-// sub-10ms for 500 jobs.
-//
-// Authoritative server values continue to win whenever they arrive
-// (Fetch / Refresh / auto-refresh enrichment all carry promotion_time
-// and overwrite the field via mergeEnrichmentFields).
+//  Client-side release_status recompute (mirrors backend logic) 
 
 function _recomputeReleaseStatusForJob(job, promotionTime) {
     if (!promotionTime) return 'NA';
 
-    // Pool every build we know about for this job, deduped by build_number.
-    // Sources: recent_builds + three_run_context's latest/previous/last_passed.
-    // last_passed is critical — it may be older than the recent window
-    // but still newer than the promotion cutoff, in which case the job
-    // has already passed validation and must NOT report as FAIL.
+    // Build a deduped pool of all known builds for this job.
     const pool = new Map();
     function consider(b) {
         if (!b || b.build_number == null || !b.timestamp) return;
@@ -365,19 +310,223 @@ function _recomputeReleaseStatusForJob(job, promotionTime) {
 
 function _recomputeAllReleaseStatusInPlace(promotionTime) {
     if (!window.appState || !appState.jobs) return;
+    // Fast path when promotion was cleared — saves ~10ms on 500-job dashboards.
+    if (!promotionTime) {
+        appState.jobs.forEach(job => { job.release_status = 'NA'; });
+        return;
+    }
     appState.jobs.forEach(job => {
         job.release_status = _recomputeReleaseStatusForJob(job, promotionTime);
     });
 }
 
-// Clear the promotion datetime and reset the dashboard
 function clearPromotionTime() {
     document.getElementById('promotion-datetime').value = '';
     _clearPromoPending();
     applyPromotionTime();
 }
 
-// Refresh regression status badges in all visible table rows
+//  Release summary export 
+//
+// Returns { text, html } describing the current release state, suitable
+// for both plain-text and rich-text clipboard targets. Solves the daily
+// "open dashboard, retype it into Slack" workflow for release managers.
+//
+function buildReleaseSummary() {
+    const promo = appState.promotionTime;
+    if (!promo) return null;
+
+    // Buckets contain JOB-ID strings — resolve to job records via appState.jobs.
+    const cats = (typeof evaluateRegressionCategories === 'function')
+        ? evaluateRegressionCategories(new Date(promo))
+        : null;
+    if (!cats) return null;
+
+    const passedIds = cats.passed || [];
+    const failedIds = cats.failed || [];
+    const inProgressIds = cats.in_progress || [];
+    const notRunIds = cats.not_executed || [];
+    const total = passedIds.length + failedIds.length + inProgressIds.length + notRunIds.length;
+    if (total === 0) return null;
+    const pct = Math.round((passedIds.length / total) * 100);
+
+    const d = new Date(promo);
+    const pad = n => String(n).padStart(2, '0');
+    const promoStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+    // Resolve a job ID to its display name + URL with defensive fallbacks
+    // so jobs whose metadata is still streaming never produce blank entries.
+    function resolveJob(id) {
+        return appState.jobs.get(id) || { job_id: id };
+    }
+    function jobName(j) {
+        if (!j) return '';
+        if (j.name && String(j.name).trim()) return String(j.name).trim();
+        if (j.job_name && String(j.job_name).trim()) return String(j.job_name).trim();
+        const idLike = j.job_id || j.url || j.job_url || '';
+        if (idLike) {
+            const parts = String(idLike).split('/').filter(Boolean);
+            return parts[parts.length - 1] || idLike;
+        }
+        return '';
+    }
+    function jobUrl(j) {
+        return (j && (j.url || j.job_url || j.job_id)) || '';
+    }
+
+    const LINK_CAP_PER_GROUP = 25;
+
+    // Plain-text (Slack mrkdwn) version — used when paste target rejects HTML.
+    function renderGroupText(heading, ids) {
+        const out = [];
+        if (!ids.length) return out;
+        out.push(`*${heading}* (${ids.length})`);
+        const shown = ids.slice(0, LINK_CAP_PER_GROUP);
+        shown.forEach(id => {
+            const job  = resolveJob(id);
+            const name = jobName(job);
+            const url  = jobUrl(job);
+            if (!name) return;
+            if (url) {
+                out.push(`• <${url}|${name}>`);
+            } else {
+                out.push(`• ${name}`);
+            }
+        });
+        if (ids.length > LINK_CAP_PER_GROUP) {
+            out.push(`• … and ${ids.length - LINK_CAP_PER_GROUP} more`);
+        }
+        return out;
+    }
+
+    const text = [];
+    text.push(`*Release Summary - ${promoStr}*`);
+    text.push(`${pct}% ready (${passedIds.length} of ${total} jobs)`);
+    text.push('');
+    text.push('*Status*');
+    text.push(`• Passed: ${passedIds.length}`);
+    text.push(`• Failed: ${failedIds.length}`);
+    text.push(`• Running: ${inProgressIds.length}`);
+    text.push(`• Awaiting re-run: ${notRunIds.length}`);
+
+    const failedLinesT   = renderGroupText('Failed',          failedIds);
+    const runningLinesT  = renderGroupText('Running',         inProgressIds);
+    const awaitingLinesT = renderGroupText('Awaiting re-run', notRunIds);
+    if (failedLinesT.length)   { text.push(''); text.push(...failedLinesT); }
+    if (runningLinesT.length)  { text.push(''); text.push(...runningLinesT); }
+    if (awaitingLinesT.length) { text.push(''); text.push(...awaitingLinesT); }
+
+    // HTML version — Slack/Teams/email rich-text composers turn <a href> into
+    // proper named hyperlinks. Escape every user-derived string against injection.
+    function esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+    function renderGroupHtml(heading, ids) {
+        if (!ids.length) return '';
+        const items = [];
+        const shown = ids.slice(0, LINK_CAP_PER_GROUP);
+        shown.forEach(id => {
+            const job  = resolveJob(id);
+            const name = jobName(job);
+            const url  = jobUrl(job);
+            if (!name) return;
+            if (url) {
+                items.push(`<li><a href="${esc(url)}">${esc(name)}</a></li>`);
+            } else {
+                items.push(`<li>${esc(name)}</li>`);
+            }
+        });
+        if (ids.length > LINK_CAP_PER_GROUP) {
+            items.push(`<li>… and ${ids.length - LINK_CAP_PER_GROUP} more</li>`);
+        }
+        return `<p><strong>${esc(heading)}</strong> (${ids.length})</p><ul>${items.join('')}</ul>`;
+    }
+
+    // <h2> heading + readiness on its own line so it formats as a title
+    // in Slack/Teams/email composers.
+    const html =
+        `<h2>Release Summary - ${esc(promoStr)}</h2>` +
+        `<p>${pct}% ready (${passedIds.length} of ${total} jobs)</p>` +
+        `<p><strong>Status</strong></p>` +
+        `<ul>` +
+            `<li>Passed: ${passedIds.length}</li>` +
+            `<li>Failed: ${failedIds.length}</li>` +
+            `<li>Running: ${inProgressIds.length}</li>` +
+            `<li>Awaiting re-run: ${notRunIds.length}</li>` +
+        `</ul>` +
+        renderGroupHtml('Failed',          failedIds) +
+        renderGroupHtml('Running',         inProgressIds) +
+        renderGroupHtml('Awaiting re-run', notRunIds);
+
+    return { text: text.join('\n'), html: html };
+}
+
+function copyReleaseSummary() {
+    const summary = buildReleaseSummary();
+    if (!summary) {
+        if (typeof showToast === 'function') {
+            showToast('Set a promotion time and fetch jobs first.', 'warning');
+        }
+        return;
+    }
+
+    const success = (msg) => {
+        if (typeof showToast === 'function') showToast(msg, 'success');
+    };
+    const failure = (err) => {
+        if (typeof showToast === 'function') {
+            showToast('Could not copy — clipboard access blocked. Check console.', 'error');
+        }
+        if (typeof diagLog === 'function') diagLog('warning', 'ReleaseSummary', 'Clipboard error: ' + (err && err.message));
+    };
+
+    // Write both text/html and text/plain. Slack/Teams pick HTML and render
+    // real named hyperlinks; plain-text-only targets fall back to mrkdwn syntax.
+    if (navigator.clipboard && window.ClipboardItem && window.isSecureContext) {
+        try {
+            const item = new ClipboardItem({
+                'text/html':  new Blob([summary.html], { type: 'text/html' }),
+                'text/plain': new Blob([summary.text], { type: 'text/plain' }),
+            });
+            navigator.clipboard.write([item])
+                .then(() => success('Release summary copied (with named hyperlinks)'))
+                .catch(failure);
+            return;
+        } catch (err) {
+            // Fall through to text-only path.
+        }
+    }
+
+    // Older browsers without ClipboardItem.
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(summary.text)
+            .then(() => success('Release summary copied to clipboard'))
+            .catch(failure);
+        return;
+    }
+
+    // Last-resort fallback: hidden textarea + execCommand('copy'). Plain-text only.
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = summary.text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        ta.style.top = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (ok) success('Release summary copied to clipboard');
+        else failure(new Error('execCommand returned false'));
+    } catch (err) {
+        failure(err);
+    }
+}
+
 function recalculateAllRegressionCells(promotionTime) {
     const rows = document.querySelectorAll('tbody tr[data-job-id]:not(.detail-row)');
     rows.forEach(row => {
@@ -392,7 +541,7 @@ function recalculateAllRegressionCells(promotionTime) {
     });
 }
 
-// Update colspan for detail rows when regression column is added/removed
+// Keep detail-row colspan in sync with the optional regression column.
 function updateDetailRowColspan() {
     const promotionActive = document.getElementById('job-table').classList.contains('promotion-active');
     const detailRows = document.querySelectorAll('tbody tr.detail-row td[colspan]');
@@ -401,7 +550,7 @@ function updateDetailRowColspan() {
     });
 }
 
-// Update the promotion panel: summary counts, category checkboxes, and rerun button state
+// Refresh the promotion panel: counts, category checkboxes, rerun button state.
 function updatePromotionPanel(promotionTime) {
     const summaryStrip = document.getElementById('promo-summary-strip');
     const actionRow = document.getElementById('promo-action-row');
@@ -417,11 +566,10 @@ function updatePromotionPanel(promotionTime) {
 
     const cats = evaluateRegressionCategories(promotionTime);
 
-    // Update summary strip with counts for each category
     document.getElementById('promo-count-passed').textContent = cats.passed.length;
     document.getElementById('promo-count-failed').textContent = cats.failed.length;
     document.getElementById('promo-count-notrun').textContent = cats.not_executed.length;
-    // Show in-progress chip only if there are running jobs
+    // In-progress chip only shows when something is running.
     const inProgChip = document.getElementById('promo-chip-inprog');
     const hasInProg = cats.in_progress.length > 0;
     if (inProgChip) {
@@ -429,15 +577,12 @@ function updatePromotionPanel(promotionTime) {
         document.getElementById('promo-count-inprog').textContent = cats.in_progress.length;
     }
     summaryStrip.classList.remove('hidden');
-
-    // Show action row with category filters
     actionRow.classList.remove('hidden');
 
     const hasNotRun = cats.not_executed.length > 0;
     const hasFailed = cats.failed.length > 0;
     const allPassed = !hasNotRun && !hasFailed && !hasInProg;
 
-    // Show/hide category checkboxes based on whether jobs exist in those categories
     const notRunWrap = document.getElementById('promo-cat-notrun-wrap');
     const failedWrap = document.getElementById('promo-cat-failed-wrap');
     const notRunCount = document.getElementById('promo-cat-notrun-count');
@@ -448,7 +593,7 @@ function updatePromotionPanel(promotionTime) {
     notRunCount.textContent = hasNotRun ? '(' + cats.not_executed.length + ')' : '';
     failedCount.textContent = hasFailed ? '(' + cats.failed.length + ')' : '';
 
-    // If all jobs passed, show success badge instead of rerun controls
+    // All passed → swap rerun controls for the success badge.
     if (allPassed) {
         if (actionLabel) actionLabel.style.display = 'none';
         notRunWrap.style.display = 'none';
@@ -461,11 +606,10 @@ function updatePromotionPanel(promotionTime) {
         allPassedBadge.classList.add('hidden');
     }
 
-    // Enable/disable rerun button based on selected categories
     updatePromoRerunState();
 }
 
-// Enable/disable rerun button based on which category checkboxes are selected
+// Enable/disable + relabel the rerun button based on selected category checkboxes.
 function updatePromoRerunState() {
     const cbNotRun = document.getElementById('promo-cat-notrun');
     const cbFailed = document.getElementById('promo-cat-failed');
@@ -473,7 +617,6 @@ function updatePromoRerunState() {
     const anySelected = (cbNotRun && cbNotRun.checked) || (cbFailed && cbFailed.checked);
     btn.disabled = !anySelected;
 
-    // Update button label with count of jobs that will be rerun
     if (anySelected) {
         const pt = getPromotionTime();
         const cats = evaluateRegressionCategories(pt);
@@ -488,7 +631,7 @@ function updatePromoRerunState() {
     }
 }
 
-// Trigger reruns for jobs in the selected regression categories (not-run and/or failed)
+// Rerun jobs in the selected regression buckets (not-run and/or failed).
 function triggerRegressionRerun() {
     const pt = getPromotionTime();
     if (!pt) return;
@@ -509,6 +652,4 @@ function triggerRegressionRerun() {
     showToast('Triggering rerun for ' + jobIds.length + ' pending job' + (jobIds.length !== 1 ? 's' : '') + '...', 'info');
     triggerRerun(jobIds);
 }
-
-// Sub-functions for renderJobRow (JS item 12)
 
