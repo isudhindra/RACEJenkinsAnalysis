@@ -126,6 +126,16 @@ function updateSummaryBar() {
         passed: agg.passed, failed: agg.failed, skipped: agg.skipped, errors: agg.errors
     });
 
+    // Diagnostic
+    if (typeof diagLog === 'function') {
+        const sampleJob = jobs.find(j => j && j.test_metrics);
+        diagLog('info', 'KPI',
+            `updateSummaryBar — jobs=${jobs.length} jobsWithTests=${agg.jobsWithTests} ` +
+            `total=${agg.total} P=${agg.passed} F=${agg.failed} S=${agg.skipped} E=${agg.errors}`,
+            sampleJob ? { raw: 'sample test_metrics: ' + JSON.stringify(sampleJob.test_metrics).slice(0, 200) } : undefined
+        );
+    }
+
     updateCounters([
         ['summary-total-tests', agg.total],
         ['summary-passed-tests', agg.passed],
