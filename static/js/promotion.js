@@ -126,10 +126,14 @@ function getPromotionTime() {
 }
 
 // ISO-8601 serialiser for backend payloads. Single seam used by every
-// fetch — keep this in lockstep with backend's _parse_promotion_time.
 function getPromotionTimeISO() {
-    const d = getPromotionTime();
-    return d ? d.toISOString() : '';
+    const input = document.getElementById('promotion-datetime');
+    const raw = input ? input.value : '';
+    if (!raw) return '';
+    // Sanity-check it's a parseable datetime-local string; reject garbage.
+    if (isNaN(new Date(raw).getTime())) return '';
+    // datetime-local inputs may include seconds or not — pad to a consistent shape.
+    return /T\d{2}:\d{2}:\d{2}/.test(raw) ? raw : raw + ':00';
 }
 
 // Quick-preset: set promotion to "now minus N minutes" and apply.

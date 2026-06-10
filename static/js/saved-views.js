@@ -34,16 +34,32 @@ function _writeSavedViews(views) {
 
 
 //  Snapshot / restore 
+function _formatLocalNaive(d) {
+    if (!(d instanceof Date) || isNaN(d.getTime())) return null;
+    const pad = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+        + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
 
 // Capture the bits of appState that uniquely identify a view configuration.
 function _captureCurrentSnapshot() {
     const filters = appState.filters || {};
+    const joblistSelect = document.getElementById('cfg-joblist-select');
+    const promoInput = document.getElementById('promotion-datetime');
+    let promoSaved = null;
+    if (promoInput && promoInput.value) {
+        promoSaved = promoInput.value;
+    } else if (appState.promotionTime instanceof Date) {
+        promoSaved = _formatLocalNaive(appState.promotionTime);
+    }
     return {
         instance_id:     appState.selectedInstance ? appState.selectedInstance.id : null,
+        source_mode:     appState.sourceMode || 'view',
         view_url:        appState._resolvedViewUrl || null,
         view_path:       (document.getElementById('cfg-view-select') || {}).value || null,
+        joblist_file:    (joblistSelect && joblistSelect.value) || null,
         view_mode:       appState.viewMode || 'summary',
-        promotion_time:  appState.promotionTime || null,
+        promotion_time:  promoSaved,
         filter_status:   filters.status || null,
         filter_release:  filters.releaseStatus || null,
         filter_search:   filters.searchText || '',
@@ -67,16 +83,22 @@ function _applySnapshot(snap) {
     appState.filters.logAnalysisLabels = Array.from(snap.filter_la || []);
     if (typeof updateSelectedLabelBadge === 'function') updateSelectedLabelBadge();
 
-    // Route through applyPromotionTime() so the regression column, release-status
-    // dropdown, and dual-panel KPI all sync. Mutating appState.promotionTime
-    // directly leaves the dropdown hidden.
+    // Route through applyPromotionTime()
     if (snap.promotion_time) {
         const promoInput = document.getElementById('promotion-datetime');
-        if (promoInput) promoInput.value = snap.promotion_time.replace(/Z$/, '').slice(0, 16);
+        if (promoInput) {
+            const raw = String(snap.promotion_time);
+            if (/Z$/.test(raw) || /[+-]\d{2}:?\d{2}$/.test(raw)) {
+                promoInput.value = _formatLocalNaive(new Date(raw)) || raw.slice(0, 16);
+            } else {
+                promoInput.value = raw.slice(0, 16);
+            }
+        }
         if (typeof applyPromotionTime === 'function') {
             applyPromotionTime();
         } else {
-            appState.promotionTime = snap.promotion_time;
+            const d = new Date(snap.promotion_time);
+            appState.promotionTime = isNaN(d.getTime()) ? null : d;
         }
     } else {
         // Snapshot had no promotion — clear any active one to match.
@@ -92,14 +114,16 @@ function _applySnapshot(snap) {
     }
 
     // Instance + view path: only restore when the instance still exists.
-    // IDs are cfg-jenkins-url / cfg-view-select (not instance-select / view-select)
-    // — using the wrong IDs silently skipped the restore for a long time.
     if (snap.instance_id) {
         const instanceSelect = document.getElementById('cfg-jenkins-url');
         if (instanceSelect && Array.from(instanceSelect.options).some(o => o.value === snap.instance_id)) {
             instanceSelect.value = snap.instance_id;
             if (typeof onInstanceChange === 'function') onInstanceChange();
         }
+    }
+    // Restore source mode (Jenkins view vs custom job list) 
+    if (snap.source_mode && typeof switchSourceMode === 'function') {
+        switchSourceMode(snap.source_mode);
     }
     if (snap.view_path) {
         // Wait for onInstanceChange() to populate the view select first.
@@ -108,6 +132,15 @@ function _applySnapshot(snap) {
             if (vs && Array.from(vs.options).some(o => o.value === snap.view_path)) {
                 vs.value = snap.view_path;
                 if (typeof onViewChange === 'function') onViewChange();
+            }
+        }, 200);
+    }
+    if (snap.joblist_file) {
+        setTimeout(() => {
+            const js = document.getElementById('cfg-joblist-select');
+            if (js && Array.from(js.options).some(o => o.value === snap.joblist_file)) {
+                js.value = snap.joblist_file;
+                if (typeof onJobListChange === 'function') onJobListChange();
             }
         }, 200);
     }
@@ -213,11 +246,11 @@ function saveCurrentView(nameArg) {
     if (!name) return;
 
     const snap = _captureCurrentSnapshot();
-    if (!snap.instance_id && !snap.view_path) {
+    if (!snap.instance_id) {
         if (typeof showToast === 'function') {
-            showToast('Pick an instance + view first, then save.', 'warning');
+            showToast('Pick a Jenkins instance first, then save.', 'warning');
         } else {
-            alert('Pick an instance + view first, then save.');
+            alert('Pick a Jenkins instance first, then save.');
         }
         return;
     }

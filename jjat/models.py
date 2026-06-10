@@ -236,11 +236,9 @@ class JobRecord:
         if promotion_time is None:
             return ReleaseStatus.NA
 
-        # Build timestamps elsewhere in this codebase are always naive;
-        # normalise tz-aware inputs (e.g. ISO-with-Z from the browser) so
-        # the comparison below doesn't raise.
+        # Build timestamps 
         if promotion_time.tzinfo is not None:
-            promotion_time = promotion_time.replace(tzinfo=None)
+            promotion_time = promotion_time.astimezone().replace(tzinfo=None)
 
         # Pool builds from recent_builds AND three_run_context, deduped
         # by number. last_passed may be older than the recent window but
