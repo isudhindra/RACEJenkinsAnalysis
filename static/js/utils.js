@@ -101,9 +101,15 @@ function animateCounterRoll(el, target) {
         el._counterRafId = null;
     }
 
-    // Read the authoritative target (not the animated intermediate) for accurate diffing.
-    const current = (typeof el._counterTarget === 'number') ? el._counterTarget : (parseInt(el.textContent.replace(/,/g, ''), 10) || 0);
-    if (current === target) return;
+
+    const displayed = parseInt(el.textContent.replace(/,/g, ''), 10) || 0;
+    const cached = (typeof el._counterTarget === 'number') ? el._counterTarget : displayed;
+
+    // Bail only when BOTH the cache AND the visible DOM are already correct.
+    if (cached === target && displayed === target) return;
+
+    // Animate from whatever is currently shown
+    const current = displayed;
 
     el._counterTarget = target;
 
