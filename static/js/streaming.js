@@ -216,6 +216,28 @@ async function initFetchStream(url, body) {
                 if (line.length > 0) dispatchSseLine(line);
             }
         }
+
+        // Safety net: server closed the stream but never emitted FETCH_COMPLETE
+        if (_rowBatch && _rowBatch.isStreaming) {
+            diagLog('warning', 'SSE', 'Stream ended without FETCH_COMPLETE — running safety-net KPI flush');
+            endStreamingMode();
+            try { updateSummaryBar(); } catch (e) { console.error('safety-net updateSummaryBar:', e); }
+            try {
+                if (appState.promotionTime && typeof updateRegressionKPI === 'function') {
+                    updateRegressionKPI(appState.promotionTime);
+                }
+            } catch (e) { console.error('safety-net updateRegressionKPI:', e); }
+            // Make sure the UI matches an idle dashboard.
+            document.getElementById('progress-bar').classList.remove('visible');
+            document.getElementById('config-panel').style.display = '';
+            const tc = document.querySelector('.table-container');
+            if (tc) tc.classList.remove('has-progress-overlay');
+            appState.activeOperationId = null;
+            appState._fetchAbortController = null;
+            updateHeaderStatus('idle');
+            updateFetchButton();
+            updateEmptyState();
+        }
     } catch (error) {
         if (error.name === 'AbortError') return; // User cancelled — handled by cancelFetch().
         endStreamingMode();

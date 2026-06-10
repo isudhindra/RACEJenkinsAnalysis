@@ -2395,6 +2395,11 @@ tbody tr[data-job-id].row-refreshing [data-action="refresh"] {
     font-variant-numeric: tabular-nums;
 }
 
+.kpi-subtitle-warn {
+    color: #B45309;
+    font-weight: 600;
+}
+
 /* Metric cards row */
 .kpi-metrics {
     display: flex;
@@ -4354,6 +4359,23 @@ tbody tr.row-selected {
 
 tbody tr.row-selected:hover {
     background-color: #EBEDF0 !important;
+}
+
+tbody tr.row-no-test-data {
+    background-color: #FFFBEB;
+    border-left: 3px solid #F59E0B;
+}
+tbody tr.row-no-test-data:nth-child(even) {
+    background-color: #FEF3C7;
+}
+tbody tr.row-no-test-data:hover {
+    background-color: #FDE68A;
+    box-shadow: 0 1px 4px rgba(245, 158, 11, 0.12);
+}
+/* When the row is also selected, keep selection colour but preserve the accent. */
+tbody tr.row-no-test-data.row-selected {
+    background-color: #FEF3C7 !important;
+    border-left-color: #B45309;
 }
 
 tr {

@@ -146,6 +146,15 @@ function updateSummaryBar() {
         jobCountEl.textContent = jc > 0 ? jc : '0';
     }
 
+    // Transparency line
+    const noTestsCount = jobs.length - agg.jobsWithTests;
+    const noTestsWrap = document.getElementById('kpi-jobs-no-tests-wrap');
+    const noTestsEl = document.getElementById('kpi-jobs-no-tests');
+    if (noTestsWrap && noTestsEl) {
+        noTestsEl.textContent = noTestsCount;
+        noTestsWrap.classList.toggle('hidden', noTestsCount <= 0);
+    }
+
     checkDegradedMode(jobs);
     updateToolbarActions();
     toggleKpiLayout();

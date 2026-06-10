@@ -234,6 +234,8 @@ function renderJobRow(job) {
     // Per-job test metrics — extractJobMetrics is the single source of truth.
     const snap = extractJobMetrics(job);
     const hm = snap.hasMetrics;
+
+    tr.classList.toggle('row-no-test-data', !hm);
     const totalCount   = hm ? snap.total   : '—';
     const passedCount  = hm ? snap.passed  : '—';
     const failedCount  = hm ? snap.failed  : '—';
@@ -287,6 +289,8 @@ function updateJobRow(jobId, job) {
 
     const snap = extractJobMetrics(job);
     const hm = snap.hasMetrics;
+    // Keep the no-test-data
+    row.classList.toggle('row-no-test-data', !hm);
     const sourceTag = metricsSourceTag(job.test_metrics || {});
 
     const metricCellUpdates = [

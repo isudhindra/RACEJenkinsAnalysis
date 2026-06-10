@@ -270,6 +270,9 @@ function applyPromotionTime() {
     updatePromotionPanel(promotionTime);
     toggleKpiLayout();
 
+    // Re-aggregate the Jobs Health panel too
+    if (typeof updateSummaryBar === 'function') updateSummaryBar();
+
     // Distinct release_status values may have changed — repopulate the filter
     // dropdown so it only offers values that exist in the table.
     if (typeof populateReleaseStatusFilter === 'function') populateReleaseStatusFilter();

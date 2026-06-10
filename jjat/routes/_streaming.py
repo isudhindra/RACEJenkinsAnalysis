@@ -151,6 +151,9 @@ def _stream_pipeline(
         """Enqueue events from orchestrator worker threads."""
         event_queue.put(event)
 
+    _KEEPALIVE_TICKS = 20  # 20 × 0.5s = 10s between pings.
+    _empty_ticks = 0
+
     #  Stage 1 --
     stage_1_thread = _run_producer_with_sentinel(
         target=orchestrator.run_stage_1,
@@ -170,8 +173,14 @@ def _stream_pipeline(
         try:
             event = event_queue.get(timeout=0.5)
         except queue.Empty:
-            # Heartbeat — only the sentinel actually terminates the loop.
+            # No event yet — emit a wire-level keep-alive periodically
+            # so a proxy doesn't see the link as idle.
+            _empty_ticks += 1
+            if _empty_ticks >= _KEEPALIVE_TICKS:
+                _empty_ticks = 0
+                yield ": ping\n\n"
             continue
+        _empty_ticks = 0
 
         if event is _STREAM_END:
             break
@@ -234,7 +243,12 @@ def _stream_pipeline(
             try:
                 event = event_queue.get(timeout=0.5)
             except queue.Empty:
+                _empty_ticks += 1
+                if _empty_ticks >= _KEEPALIVE_TICKS:
+                    _empty_ticks = 0
+                    yield ": ping\n\n"
                 continue
+            _empty_ticks = 0
 
             if event is _STREAM_END:
                 break
