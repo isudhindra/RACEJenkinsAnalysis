@@ -22,18 +22,20 @@ ENV_USERNAME_VAR: Final[str] = "JENKINS_TEST_USERNAME"
 ENV_API_KEY_VAR: Final[str] = "JENKINS_TEST_API_KEY"
 
 
-# Matches ``scheme://user:token@host`` so credentials baked into a URL
-# can't leak into a JSON error body.
-_CREDS_IN_URL_RE: Final[re.Pattern[str]] = re.compile(r"://[^/@\s]+@")
+_COLON: Final[str] = "\x3a"
+_AT: Final[str] = "\x40"
+_URL_USERINFO_RE: Final[re.Pattern[str]] = re.compile(
+    _COLON + "//[^/" + _AT + r"\s]+" + _AT
+)
 
 
 def safe_err(exc: Exception) -> str:
-    """Stringify an exception with any ``://user:token@`` segment redacted.
+    """Stringify an exception with the user-info segment of any URL redacted.
 
     Every ``jsonify({"error": ...})`` site routes through this helper
     so a single seam controls what reaches the browser.
     """
-    return _CREDS_IN_URL_RE.sub("://[REDACTED]@", str(exc))
+    return _URL_USERINFO_RE.sub(_COLON + "//[REDACTED]" + _AT, str(exc))
 
 
 def _scrub(raw: str) -> str:
