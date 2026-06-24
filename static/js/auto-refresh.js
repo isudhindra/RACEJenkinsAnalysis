@@ -1,11 +1,21 @@
 // Background polling that keeps row statuses fresh without a full refetch.
-// Polls /api/poll-status every 30s, diffs against last seen, and pulls full
-// records for changed jobs so the table updates in place.
+
 'use strict';
 
-const AR_INTERVAL_MS = 30000;
+let AR_INTERVAL_MS = 30000;
 const AR_STORAGE_KEY = 'auto_refresh_enabled';
 const AR_FLASH_DURATION_MS = 1600;
+
+// Called once at boot with the effective interval from the backend
+function setAutoRefreshInterval(ms) {
+    const n = Number(ms);
+    if (!Number.isFinite(n) || n < 5000 || n > 600000) return;
+    AR_INTERVAL_MS = n;
+    if (window._autoRefresh && window._autoRefresh.timer) {
+        clearInterval(window._autoRefresh.timer);
+        window._autoRefresh.timer = setInterval(_pollOnce, AR_INTERVAL_MS);
+    }
+}
 
 // Exposed on window for diagnostics only.
 window._autoRefresh = {
@@ -44,8 +54,10 @@ function _shouldSkipThisTick() {
 }
 
 // Stable signature used to detect "anything changed for this job".
-function _sig(buildNumber, status) {
-    return (buildNumber == null ? '' : String(buildNumber)) + ':' + (status || '');
+function _sig(buildNumber, status, isRunning) {
+    return (buildNumber == null ? '' : String(buildNumber))
+         + ':' + (status || '')
+         + ':' + (isRunning ? 'R' : 'D');
 }
 
 //  Core poll 
@@ -58,12 +70,17 @@ async function _pollOnce() {
     try {
         const creds = appState.authCredentials;
         const jobUrls = Array.from(appState.jobs.keys());
+        const viewUrl = appState.currentViewUrl || '';
+        const sourceMode = appState.sourceMode || '';
+        const tickStart = performance.now();
 
-        const resp = await fetch('/api/poll-status', {
+        const resp = await apiFetch('/api/poll-status', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 job_urls: jobUrls,
+                view_url: viewUrl,
+                source_mode: sourceMode,
                 jenkins_url: creds.jenkins_url,
                 username: creds.username,
                 api_token: creds.api_token,
@@ -94,7 +111,7 @@ async function _pollOnce() {
         const isFirstPoll = window._autoRefresh.lastStatuses.size === 0;
 
         for (const s of statuses) {
-            const sig = _sig(s.build_number, s.status);
+            const sig = _sig(s.build_number, s.status, !!s.is_running);
             const previous = window._autoRefresh.lastStatuses.get(s.job_url);
             window._autoRefresh.lastStatuses.set(s.job_url, sig);
             if (!isFirstPoll && previous !== undefined && previous !== sig) {
@@ -102,20 +119,32 @@ async function _pollOnce() {
             }
         }
 
+        // One summary line per tick
+        const tookMs = Math.round(performance.now() - tickStart);
+        const backDiag = (data && data.diag) || {};
+        const summary = 'polled=' + jobUrls.length
+                      + ' batched=' + (backDiag.batched || 0)
+                      + ' per_job=' + (backDiag.per_job || 0)
+                      + ' jenkins=' + (backDiag.jenkins_calls != null ? backDiag.jenkins_calls : '?')
+                      + ' changed=' + changed.length
+                      + ' took=' + tookMs + 'ms';
+        diagLog && diagLog('info', 'AutoRefresh', summary);
+
         if (!changed.length) return;
 
-        // For each changed job, pull the full record so metrics and
-        // release_status stay correct. Capped at 3 in-flight requests to
-        // avoid saturating the browser network stack + Jenkins on big bursts.
-        await _runWithConcurrencyLimit(changed, _enrichChangedJob, 3);
+        // Priority-aware enrichment order
+        const orderedChanged = (typeof sortJobUrlsByPriority === 'function')
+            ? sortJobUrlsByPriority(changed)
+            : changed;
 
-        // Fresh status implicitly means any prior rerun has landed —
-        // clear the TRIGGERED chip immediately rather than waiting for
-        // the 10s scheduleRerunBadgeCleanup timer to avoid contradictory UI.
-        changed.forEach(_clearRerunBadge);
+        // For each changed job
+        await _runWithConcurrencyLimit(orderedChanged, _enrichChangedJob, 3);
 
-        changed.forEach(_flashRow);
-        _showAutoRefreshToast(changed.length);
+        // Fresh status implicitly
+        orderedChanged.forEach(_clearRerunBadge);
+
+        orderedChanged.forEach(_flashRow);
+        _showAutoRefreshToast(orderedChanged.length);
 
     } catch (err) {
         diagLog && diagLog('warning', 'AutoRefresh', 'Poll error: ' + (err && err.message));
@@ -148,7 +177,7 @@ async function _enrichChangedJob(jobUrl) {
     const existing = appState.jobs.get(jobUrl);
     const jobName = existing ? (existing.name || existing.job_name) : jobUrl.split('/').pop();
     try {
-        const resp = await fetch('/api/refresh-single', {
+        const resp = await apiFetch('/api/refresh-single', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -220,16 +249,19 @@ function _showAutoRefreshToast(n) {
 function _startAutoRefresh() {
     if (window._autoRefresh.timer) return;
     window._autoRefresh.lastStatuses.clear();
-    // Seed the cache from the already-fetched jobs so the FIRST poll can
-    // detect changes — otherwise we'd burn a 30s tick just learning the baseline.
+    // Seed the cache from the already-fetched jobs so the FIRST poll
     if (window.appState && window.appState.jobs) {
         window.appState.jobs.forEach((job, jobUrl) => {
-            const sig = _sig(job.last_build_number, job.latest_status);
+            const sig = _sig(
+                job.last_build_number,
+                job.latest_status,
+                !!(job.is_running || job.latest_status === 'IN_PROGRESS')
+            );
             window._autoRefresh.lastStatuses.set(jobUrl, sig);
         });
     }
     window._autoRefresh.timer = setInterval(_pollOnce, AR_INTERVAL_MS);
-    // Fire one quick poll so changes surface immediately, not in 30s.
+    // Fire one quick poll so changes surface immediately, not after a tick.
     setTimeout(_pollOnce, 1500);
 }
 

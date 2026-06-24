@@ -241,6 +241,11 @@ function applyPromotionTime() {
 
     // Release Status filter dropdown visibility tracks the column.
     var releaseFilter = document.getElementById('filter-release-status');
+    // Auto-expand the collapsible Release Validation panel
+    var promoPanel = document.getElementById('promo-panel');
+    if (promoPanel && !promoPanel.dataset.userToggled) {
+        promoPanel.open = !!promotionTime;
+    }
     if (promotionTime) {
         table.classList.add('promotion-active');
         clearBtn.classList.remove('hidden');
@@ -249,8 +254,11 @@ function applyPromotionTime() {
         table.classList.remove('promotion-active');
         clearBtn.classList.add('hidden');
         summaryStrip.classList.add('hidden');
+        var summaryStripBody = document.getElementById('promo-summary-strip-body');
+        if (summaryStripBody) summaryStripBody.classList.add('hidden');
         actionRow.classList.add('hidden');
         clearValidationCache();
+        if (promoPanel) delete promoPanel.dataset.userToggled;
         if (releaseFilter) {
             releaseFilter.value = '';
             releaseFilter.classList.add('hidden');
@@ -560,6 +568,7 @@ function updateDetailRowColspan() {
 // Refresh the promotion panel: counts, category checkboxes, rerun button state.
 function updatePromotionPanel(promotionTime) {
     const summaryStrip = document.getElementById('promo-summary-strip');
+    const summaryStripBody = document.getElementById('promo-summary-strip-body');
     const actionRow = document.getElementById('promo-action-row');
     const allPassedBadge = document.getElementById('promo-all-passed-badge');
     const rerunBtn = document.getElementById('promo-rerun-btn');
@@ -567,23 +576,37 @@ function updatePromotionPanel(promotionTime) {
 
     if (!promotionTime || appState.jobs.size === 0) {
         summaryStrip.classList.add('hidden');
+        if (summaryStripBody) summaryStripBody.classList.add('hidden');
         actionRow.classList.add('hidden');
         return;
     }
 
     const cats = evaluateRegressionCategories(promotionTime);
 
-    document.getElementById('promo-count-passed').textContent = cats.passed.length;
-    document.getElementById('promo-count-failed').textContent = cats.failed.length;
-    document.getElementById('promo-count-notrun').textContent = cats.not_executed.length;
-    // In-progress chip only shows when something is running.
+    // Helper writes the same count into both chip sets so the summary
+    function _setBoth(idHead, idBody, value) {
+        var head = document.getElementById(idHead); if (head) head.textContent = value;
+        var body = document.getElementById(idBody); if (body) body.textContent = value;
+    }
+    _setBoth('promo-count-passed', 'promo-count-passed-body', cats.passed.length);
+    _setBoth('promo-count-failed', 'promo-count-failed-body', cats.failed.length);
+    _setBoth('promo-count-notrun', 'promo-count-notrun-body', cats.not_executed.length);
+
+    // In-progress chip only shows when something is running — sync both.
     const inProgChip = document.getElementById('promo-chip-inprog');
+    const inProgChipBody = document.getElementById('promo-chip-inprog-body');
     const hasInProg = cats.in_progress.length > 0;
     if (inProgChip) {
         inProgChip.style.display = hasInProg ? '' : 'none';
         document.getElementById('promo-count-inprog').textContent = cats.in_progress.length;
     }
+    if (inProgChipBody) {
+        inProgChipBody.style.display = hasInProg ? '' : 'none';
+        var inProgCountBody = document.getElementById('promo-count-inprog-body');
+        if (inProgCountBody) inProgCountBody.textContent = cats.in_progress.length;
+    }
     summaryStrip.classList.remove('hidden');
+    if (summaryStripBody) summaryStripBody.classList.remove('hidden');
     actionRow.classList.remove('hidden');
 
     const hasNotRun = cats.not_executed.length > 0;
@@ -659,4 +682,13 @@ function triggerRegressionRerun() {
     showToast('Triggering rerun for ' + jobIds.length + ' pending job' + (jobIds.length !== 1 ? 's' : '') + '...', 'info');
     triggerRerun(jobIds);
 }
+
+// Record when the user manually toggles the Release Validation panel
+document.addEventListener('DOMContentLoaded', function () {
+    var panel = document.getElementById('promo-panel');
+    if (!panel) return;
+    panel.addEventListener('toggle', function () {
+        panel.dataset.userToggled = '1';
+    });
+});
 

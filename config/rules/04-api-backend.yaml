@@ -12,6 +12,9 @@ rules:
     patterns:
       - "Unable to find timeline event"
       - "Timeline event:.*not found within"
+    
+    # Extract the missing event name(s)
+    extract_pattern: "(?:Unable to find timeline event '(?P<event_single>[^']+)'|Timeline event: (?P<event_timeout>[A-Za-z0-9_]+) not found|Unable to find timeline event defined by (?P<event_composite>\\[[^\\]]+\\]))"
     action: "Backend did not emit the expected event in time. Check the producing service (application, payment, document) and the event bus for delays, dropped messages, or a regression in the event publication flow."
     scope: "global"
 

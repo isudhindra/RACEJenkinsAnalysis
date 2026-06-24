@@ -1,97 +1,120 @@
 # How to add a classification rule
 
-The dashboard reads every `*.yaml` file in this directory and merges
-them into one rule list, sorted by `priority`.  Adding a new rule is a
-single edit to the right domain file — no code change needed.
+You open the RACE dashboard. One job in the overnight run is red. The "Log Analysis" column just says **Inconclusive** — which tells you nothing. You click into the job, scroll the console, and spot it almost immediately:
 
-## 1. Pick the right file
+```
+HTTP/1.1" 429 Too Many Requests
+```
 
-| Failure looks like… | Edit |
-|---|---|
-| Wait timeouts (`TimeoutException`, `page load timed out`, step timed out) | `01-timeout.yaml` |
-| Selector / DOM problem (`NoSuchElement`, stale, click intercepted, not interactable) | `02-ui-locator.yaml` |
-| Driver session crash / disconnect | `03-browser-session.yaml` |
-| HTTP error from the app (5xx, 401/403, 404, missing event) | `04-api-backend.yaml` |
-| Network / TLS / DNS / DB / OOM / permission | `05-environment.yaml` |
-| Assertion mismatch (JUnit, Hamcrest, AssertJ) | `06-assertion.yaml` |
-| Test data missing or null | `07-test-data.yaml` |
-| Cucumber framework (pending / undefined / ambiguous / step-failed) or generic exception | `08-automation.yaml` |
-| Maven / Gradle compile or dependency | `09-build-config.yaml` |
+Staging is throttling us again. You've seen this three times this month. It would be so much nicer if RACE just *said* "Rate Limited" next to the build, the way it does for timeouts and locator failures.
 
-If the failure doesn't fit any existing file, create a new `10-<your-domain>.yaml`
-and add the domain colour to `_meta.yaml`.
+Good news: that's exactly what rules are for, and you can add one in about five minutes — entirely from the dashboard, no terminal needed for the first pass.
 
-## 2. Pick a priority
+## What is a rule, anyway?
 
-Lower priority number wins.  The bands are:
+A **rule** is a short label (e.g. "Rate Limited") plus a few search phrases (e.g. `Too Many Requests`). When any phrase appears in a failed job's console log, the label shows up as a chip in the dashboard's **Log Analysis** column. RACE ships with about a hundred of these already; you're just going to add one more.
 
-| Band | Use for |
-|---|---|
-| 5 – 19 | **Very specific**, high-confidence matches.  Wins over anything else. |
-| 20 – 49 | Specific TIER-1 matches (most rules live here). |
-| 50 – 99 | TIER-2 — broader signatures (infra, browser, env). |
-| 700 – 899 | Catch-alls — only fire when no specific rule matches. |
-| 900+ | Reserved for the generic-exception fallback.  Don't use. |
+---
 
-When in doubt, slot your new rule **between two existing ones** at an
-even number (priorities in the existing files are spaced by 2 on
-purpose, so you always have room).
+## Step 1 — Ask RACE what it currently sees
 
-## 3. Schema cheat-sheet
+In the dashboard header, click the **Test Classification** icon (right next to **Diagnostics**). A panel slides open with two text boxes.
+
+1. Copy the failing job's console log (or just the chunk around the error — a few hundred lines is plenty).
+2. Paste it into the **Console log** box.
+3. Leave the **Candidate YAML** box empty for now.
+4. Click **Classify**.
+
+Under the hood the panel sends your text to RACE's live rules and shows you the verdict:
+
+> **Matched rule:** `generic_exception_fallback`  
+> **Label:** Inconclusive  
+> **Matched pattern:** `Exception`  
+> **Impact:** Inconclusive
+
+That confirms it: nothing specific fired, so the generic catch-all won. Time to fix that.
+
+---
+
+## Step 2 — Draft a rule, right there in the panel
+
+Don't close the panel. Scroll down to the **Candidate YAML** box and type a draft rule in. Here's the shape — seven fields, all short:
 
 ```yaml
-- name: "my_rule_name"          # snake_case, unique across ALL files
-  priority: 42                  # see band table above
-  domain: "API / Backend Service"  # must match a key in _meta.yaml's domain_colors
-  subcategory: "HTTP 429"        # short noun phrase, shown in detail view
-  impact: "Test Issue"           # "Product Regression Likely" | "Test Issue" | "Data Issue" | "Infrastructure Likely" | "Inconclusive"
-  label: "Rate Limited"          # short chip text, shown in the Log Analysis column
-  patterns:
-    - "HTTP/1\\.1\" 429"          # YAML strings need backslashes doubled
-    - "Too Many Requests"
-  action: "Reduce request rate or check the rate-limiter config."
-  scope: "global"                # always "global" for now
+rules:
+  - name: "http_429_rate_limited"        # snake_case, unique
+    priority: 32                          # lower number wins
+    domain: "API / Backend Service"       # must exist in _meta.yaml
+    subcategory: "HTTP 429"               # noun phrase for the detail view
+    impact: "Infrastructure Likely"       # one of five fixed values (see card below)
+    label: "Rate Limited"                 # the chip text (2-4 words)
+    patterns:
+      - "HTTP/1\\.1\" 429"
+      - "Too Many Requests"
+    action: "Staging API throttled us. Slow the test's request rate or ask Platform to raise the staging quota."
+    scope: "global"                       # always "global" for now
 ```
 
-### Field notes
+Click **Classify** again. The panel layers your candidate over the live rules in a sandbox (your draft is never saved yet — nothing in production has changed), re-runs the classification, and shows the new result:
 
-- **`name`** — used in logs + tests.  Stays stable forever; renaming
-  invalidates anyone who searched for it.
-- **`patterns`** — Python regex (case-sensitive by default; prefix with
-  `(?i)` for case-insensitive).  At least one must match for the rule
-  to fire.  First match anywhere in the (normalised) log wins.
-- **`label`** — what users see as a chip in the table.  Keep it short:
-  2–4 words.
-- **`action`** — one sentence telling the on-call what to do next.
-  Don't be vague ("check the logs"); name the service / file / step.
+> **Matched rule:** `http_429_rate_limited`  
+> **Label:** Rate Limited  
+> **Matched pattern:** `Too Many Requests`  
+> **Impact:** Infrastructure Likely
 
-## 4. Test locally
+That's the chip you wanted. If you got the *wrong* match — or no match at all — tweak the YAML in the box and click Classify again. Iterate as many times as you like; the panel is a free sandbox.
 
-```bash
-source venv/bin/activate
-python -c "
-from jjat.pipeline import Classifier
-c = Classifier(rules_path='config/rules')
-# Paste a log snippet that should match your new rule:
-r = c.classify('HTTP/1.1\" 429 Too Many Requests')
-print(r.label, '/', r.matched_rule_name, '/ priority?', r.matched_pattern)
-"
-```
+---
 
-Expect your new rule's `label` + `matched_rule_name` in the output.
-If a different rule fires, your priority is too low (raise it — lower
-number wins) or the existing rule's regex is more specific than yours.
+## Step 3 — Save the rule for real
 
-## 5. Common pitfalls
+Now the rule needs to live in a file. Pick the file that fits your rule's **domain**:
 
-- **Duplicate name** — the loader rejects two files defining the same
-  `name`.  Pick a fresh one.
-- **Domain not in `_meta.yaml`** — the chip will render grey instead of
-  the colour you expect.  Add the domain to `domain_colors` in
-  `_meta.yaml`.
-- **Regex too greedy** — `"Exception"` matches everything.  Anchor or
-  qualify (`"java\\.lang\\.IllegalStateException"`).
-- **YAML escaping** — backslashes need to be doubled (`\\d+`), and any
-  string containing `:` or `#` should be wrapped in double quotes.
+| If your rule is about… | Save into |
+|---|---|
+| Wait or page-load timeouts | `01-timeout.yaml` |
+| Selectors, stale elements, click-intercepted | `02-ui-locator.yaml` |
+| Driver crashes / disconnects | `03-browser-session.yaml` |
+| **HTTP errors from the app (5xx, 4xx, 429)** | **`04-api-backend.yaml`** |
+| Network, TLS, DNS, DB, OOM, permissions | `05-environment.yaml` |
+| Assertion mismatches (JUnit, AssertJ, Hamcrest) | `06-assertion.yaml` |
+| Missing or null test data | `07-test-data.yaml` |
+| Cucumber pending / undefined / framework | `08-automation.yaml` |
+| Maven / Gradle compile or dependency | `09-build-config.yaml` |
 
-That's it.  Save the file, restart the dashboard, the rule is live.
+Our 429 rule is an API thing, so it goes in `04-api-backend.yaml`. Open that file (in your editor of choice, or ask a teammate to commit it) and paste the rule block — exactly as you finalised it in the panel — at the bottom, keeping the indentation consistent with the rules above it.
+
+> **Skip the restart forever.** Set the environment variable `RACE_HOT_RELOAD=1` once when launching the dashboard. From then on, RACE watches `config/rules/` and reloads any change within about 5 seconds. Save the file, refresh the dashboard, done. Without it, you need to restart the dashboard process for the new rule to take effect.
+
+Either way, the next overnight run will tag this failure as **Rate Limited** instead of Inconclusive. Mission accomplished.
+
+---
+
+## Reference card — the rule fields
+
+| Field | What goes in it |
+|---|---|
+| `name` | Snake-case identifier. Must be unique across **all** rule files. Don't rename it later — it's used in logs and tests. |
+| `priority` | Lower number wins. Most new rules: **20–49**. Catch-alls: **700–899**. Existing rules are spaced by 2, so there's always room. |
+| `domain` | Failure family. Must match a key in `_meta.yaml` (e.g. `API / Backend Service`) or the chip renders grey. |
+| `subcategory` | Short noun phrase shown in the detail view (e.g. `HTTP 429`). |
+| `impact` | One of: `Product Regression Likely`, `Test Issue`, `Data Issue`, `Infrastructure Likely`, `Inconclusive`. |
+| `label` | The chip text users see. 2–4 words. |
+| `patterns` | A list. Each entry is a search pattern. **At least one must match** for the rule to fire. |
+| `action` | One sentence telling the on-call what to do next. Name the service or file — not "check the logs". |
+| `scope` | Always `"global"` for now. |
+
+**About patterns:** they're case-sensitive Python regex, but 90% of the time five to ten plain characters lifted straight from the error line are all you need (`Too Many Requests` works fine). If you must use a backslash — say, to match a literal dot — double it in YAML: write `\\.` to mean `\.`. Need case-insensitive? Prefix the pattern with `(?i)`.
+
+---
+
+## Common slips
+
+- **Duplicate `name`.** The loader rejects two rules sharing a name, even across different files. Pick something fresh.
+- **Domain not in `_meta.yaml`.** Your chip will render grey instead of the colour you expected. Add the domain under `domain_colors` in `_meta.yaml` (or stick to an existing one).
+- **Pattern too generic.** `"Exception"` matches almost every Java stack trace. Anchor it: `"java\\.lang\\.IllegalStateException"`.
+- **YAML escaping.** Double your backslashes (`\\d+`, not `\d+`), and wrap any pattern containing `:` or `#` in double quotes.
+
+---
+
+That's it — paste, classify, iterate, save. The dashboard will already know what to call it.

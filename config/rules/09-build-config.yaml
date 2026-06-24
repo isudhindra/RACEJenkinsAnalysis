@@ -1,21 +1,6 @@
-# Build failures — code that didn't compile, dependencies that couldn't
-# be resolved, or builds that finished without running any tests at all.
+# Build failures
 
 rules:
-  - name: "compilation_error"
-    priority: 70
-    domain: "Build / Configuration"
-    subcategory: "Compilation Error"
-    impact: "Product Regression Likely"
-    label: "Compilation Failure"
-    patterns:
-      - "COMPILATION ERROR"
-      - "BUILD FAILURE"
-      - "cannot find symbol"
-      - "package .* does not exist"
-    action: "Code doesn't compile. Check recent commits and Maven/Gradle dependency changes."
-    scope: "global"
-
   - name: "maven_dependency"
     priority: 72
     domain: "Build / Configuration"
@@ -37,7 +22,8 @@ rules:
     label: "No Tests Executed"
     patterns:
       - "No tests were executed"
-      - "Tests run: 0, Failures: 0, Errors: 0"
       - "There are no tests to run"
+      - "No tests found matching"
+      - "No tests found for given includes"
     action: "Suite ran with zero tests. Check Cucumber tag filters and test path config."
     scope: "global"

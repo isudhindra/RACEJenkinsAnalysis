@@ -140,7 +140,8 @@ async function initFetchStream(url, body) {
 
     try {
         const _sseT0 = performance.now();
-        const response = await fetch(url, {
+        // POST so apiFetch's X-RACE-Token header works — no ?token= fallback needed.
+        const response = await apiFetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -286,6 +287,45 @@ const _rowBatch = {
     freshTimers: [],
 };
 
+// Watchdog timeout for the .row-pending state.
+const PENDING_WATCHDOG_MS = 30 * 1000;
+
+// jobId → setTimeout handle for that row's pending-watchdog. Lets us
+// cancel the watchdog the moment real enrichment arrives, and keeps
+// only one timer per row even across re-enqueues.
+const _pendingWatchdogs = new Map();
+
+// Arm (or re-arm) the pending watchdog for a single job.
+function armPendingWatchdog(jobId) {
+    if (!jobId) return;
+    const existing = _pendingWatchdogs.get(jobId);
+    if (existing) clearTimeout(existing);
+    const handle = setTimeout(() => {
+        _pendingWatchdogs.delete(jobId);
+        const row = getJobRowEl(jobId);
+        if (!row || !row.classList.contains('row-pending')) return;
+        row.classList.remove('row-pending');
+        const cell = row.querySelector('.cell-log-analysis');
+        if (cell) {
+            cell.innerHTML = '<span class="row-enriching-indicator row-enriching-indicator--unavailable" '
+                           + 'title="No classification arrived within ' + (PENDING_WATCHDOG_MS / 1000)
+                           + 's">Analysis unavailable</span>';
+        }
+    }, PENDING_WATCHDOG_MS);
+    _pendingWatchdogs.set(jobId, handle);
+}
+
+// Cancel and forget the watchdog for a job. Called when enrichment
+// arrives or the row is removed from the table.
+function cancelPendingWatchdog(jobId) {
+    if (!jobId) return;
+    const handle = _pendingWatchdogs.get(jobId);
+    if (handle) {
+        clearTimeout(handle);
+        _pendingWatchdogs.delete(jobId);
+    }
+}
+
 function showTableLoadingIndicator(message) {
     const el = $id('table-loading-indicator');
     if (!el) return;
@@ -373,6 +413,7 @@ function flushRowBatch() {
             row.classList.add('row-pending');
             const recCell = row.querySelector('.cell-log-analysis');
             if (recCell) recCell.innerHTML = '<span class="row-enriching-indicator">Analyzing...</span>';
+            armPendingWatchdog(row.getAttribute('data-job-id'));
         }
         // Cap stagger at 0.7s so large fetches don't get unbearably long entry delays.
         const staggerBase = Math.min(_rowBatch.insertionCounter * 0.035, 0.7);
@@ -460,6 +501,7 @@ function endStreamingMode() {
                     row.classList.add('row-pending');
                     const recCell = row.querySelector('.cell-log-analysis');
                     if (recCell) recCell.innerHTML = '<span class="row-enriching-indicator">Analyzing...</span>';
+                    armPendingWatchdog(row.getAttribute('data-job-id'));
                 }
                 row.style.animationDelay = '0s';
                 row.dataset.insertionOrder = _rowBatch.insertionCounter++;
@@ -482,6 +524,9 @@ function resetRowBatch() {
     // refs alive to rows that are being thrown away.
     for (const t of _rowBatch.freshTimers) clearTimeout(t);
     _rowBatch.freshTimers = [];
+    // Cancel every pending-enrichment watchdog — those rows are gone.
+    for (const t of _pendingWatchdogs.values()) clearTimeout(t);
+    _pendingWatchdogs.clear();
     _rowBatch.queue = [];
     _rowBatch.insertionCounter = 0;
     _rowBatch.totalExpected = 0;
@@ -527,6 +572,7 @@ function handleJobMetadata(data) {
         // Selective refresh path — update in place.
         updateJobRow(jobId, job);
         existingRow.classList.remove('row-pending');
+        cancelPendingWatchdog(jobId);
         scheduleFilterSortUpdate();
     } else {
         // New row — render and enqueue for batched insertion.
@@ -569,6 +615,7 @@ function handleJobEnriched(data) {
             matched_rule_name: c.matched_rule_name,
             matched_pattern: c.matched_pattern,
             evidence_snippet: c.evidence_snippet,
+            evidence_detail: c.evidence_detail || null,
             action: c.action,
             label: c.label || c.subcategory || '',
             all_labels: c.all_labels || [],
@@ -581,6 +628,7 @@ function handleJobEnriched(data) {
     const row = getJobRowEl(jobId);
     if (row) {
         row.classList.remove('row-pending');
+        cancelPendingWatchdog(jobId);
         row.classList.add('row-just-enriched');
         row.style.animationDelay = '0s';
         updateJobRow(jobId, job);
@@ -617,7 +665,7 @@ function handleProgressUpdate(data) {
 
     // `data.stage` is the lowercase *pipeline phase* ("stage_1" = metadata fetch,
     // "stage_2" = enrichment). It is intentionally distinct from the uppercase
-    // StageCompletion enum on individual job records — see jjat/models.py.
+    // StageCompletion enum on individual job records — see race/models.py.
     if (data.stage === 'stage_1') {
         stageLabel.textContent = 'Fetching Build Results & Test Metrics';
         progressText.textContent = `Retrieving metadata for ${completed} of ${total} jobs...`;
@@ -829,20 +877,45 @@ async function triggerSelectiveRefresh(scope) {
     if (!creds) return;
 
     let jobIds = [];
+    let backendScope = scope;
+    let scopeLabel = '';  // For the user-facing "Refreshing X jobs" toast.
     const statusMap = { 'failed': 'FAILURE', 'unstable': 'UNSTABLE', 'aborted': 'ABORTED' };
+
     if (statusMap[scope]) {
-        // Scope to *visible* rows only — "Refresh Failed" should act on what
-        // the user actually sees, not on jobs hidden by an active search/filter.
-        // Matches triggerRerunAllFailed() and updateToolbarActions() semantics.
-        jobIds = (typeof getVisibleJobs === 'function' ? getVisibleJobs() : Array.from(appState.jobs.values()))
-            .filter(job => job.latest_status === statusMap[scope])
-            .map(job => job.job_id);
+        // the action-scope spec.
+        const actionScope = (typeof getActionScope === 'function') ? getActionScope() : null;
+        const sourceJobs = actionScope
+            ? actionScope.jobIds.map(id => appState.jobs.get(id)).filter(Boolean)
+            : Array.from(appState.jobs.values());
+        const filtered = sourceJobs.filter(job => job.latest_status === statusMap[scope]);
+        jobIds = filtered.map(job => job.job_id);
+        scopeLabel = `${filtered.length} ${scope} job${filtered.length === 1 ? '' : 's'}`;
+        if (actionScope && actionScope.label !== 'all') {
+            scopeLabel += ` from ${actionScope.label} scope`;
+        }
     } else if (scope === 'selected') {
         jobIds = Array.from(appState.selectedJobs);
+        scopeLabel = `${jobIds.length} selected job${jobIds.length === 1 ? '' : 's'}`;
+    } else if (scope === 'all') {
+        // "Full Refresh" honours the action-scope rule
+        const actionScope = (typeof getActionScope === 'function') ? getActionScope() : { label: 'all', jobIds: [], count: 0 };
+        if (actionScope.label !== 'all') {
+            jobIds = actionScope.jobIds;
+            backendScope = 'selected';
+        }
+        scopeLabel = (typeof describeScope === 'function') ? describeScope(actionScope) : `${jobIds.length || appState.jobs.size} jobs`;
+    }
+
+    if (jobIds.length === 0 && backendScope === 'selected') {
+        showToast('Nothing in the current scope to refresh', 'info');
+        return;
+    }
+    if (scopeLabel) {
+        showToast(`Refreshing ${scopeLabel}…`, 'info');
     }
 
     const body = {
-        scope: scope,
+        scope: backendScope,
         job_ids: jobIds,
         jenkins_url: creds.jenkins_url,
         username: creds.username,

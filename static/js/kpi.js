@@ -252,6 +252,7 @@ function updateRegressionKPI(promotionTime) {
 
 // Toggle the "no jobs loaded" / "no results match filter" placeholders.
 function updateEmptyState() {
+    if (typeof updateScopeIndicator === 'function') updateScopeIndicator();
     const hasJobs = appState.jobs.size > 0;
     const table = $id('job-table');
     const noResults = $id('no-results-state');

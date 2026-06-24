@@ -1,7 +1,7 @@
 {
   "jobs": [
-    "frontend-plp-regression-preprod",
-    "frontend-pdp-regression-preprod",
+    "frontend-regression-preprod",
+    "frontend-payment-regression-preprod",
     "frontend-checkout-regression-preprod",
     "frontend-search-regression-preprod",
     "frontend-account-regression-preprod",

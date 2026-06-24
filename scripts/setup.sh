@@ -92,7 +92,7 @@ analyseJenkins() {
             if [ -d "\$candidate" ]; then VENV_DIR="\$candidate"; break; fi
         done
         if [ -z "\$VENV_DIR" ]; then
-            echo "venv missing — run: python3 -m venv venv && source venv/bin/activate && pip install Flask requests PyYAML"
+            echo "venv missing — run: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.lock.txt && pip install -e . --no-deps"
             exit 1
         fi
         # shellcheck disable=SC1090

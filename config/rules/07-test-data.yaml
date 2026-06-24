@@ -3,6 +3,17 @@
 # not a product bug.
 
 rules:
+  - name: "reviewable_not_found"
+    priority: 23
+    domain: "Test Data"
+    subcategory: "Reviewable Not Created"
+    impact: "Product Regression Likely"
+    label: "Reviewable Not Found"
+    patterns:
+      - "AssertionError: Reviewable .* not found on application"
+    action: "Expected reviewable wasn't created on the application — likely an upstream check didn't fire. Inspect the check-producer service (photo, sanctions, fingerprint, etc.) for missing or delayed events."
+    scope: "global"
+
   - name: "test_data_missing"
     priority: 36
     domain: "Test Data"
@@ -24,6 +35,5 @@ rules:
     label: "Null Test Data"
     patterns:
       - "java\\.lang\\.NullPointerException.*testdata"
-      - "Cannot invoke .* because .* is null"
     action: "Test data lookup returned null. Check data provider, fixture, or @Before hook output."
     scope: "global"

@@ -1,6 +1,110 @@
 // utils.js — Shared DOM helpers, formatters, and small utility functions used everywhere.
 'use strict';
 
+// Local API token. apiFetch() attaches X-RACE-Token to every /api/* call;
+// SSE callers use sseUrl() with ?token= because EventSource can't add headers.
+window.RACE_TOKEN = (function () {
+    try {
+        const m = document.querySelector('meta[name="race-token"]');
+        return m ? (m.getAttribute('content') || '') : '';
+    } catch (_) { return ''; }
+})();
+
+// Two distinct 401 banners.
+let _race401LocalBannerShown = false;
+let _race401JenkinsBannerShown = false;
+
+function _renderBanner(id, bg, message) {
+    if (document.getElementById(id)) return;
+    try {
+        const banner = document.createElement('div');
+        banner.id = id;
+        banner.setAttribute('role', 'alert');
+        // Stack a second banner under the first if both ever fire.
+        const existing = document.querySelector('#race-auth-expired-banner, #race-jenkins-auth-banner');
+        const topPx = existing ? (existing.offsetHeight + 0) : 0;
+        banner.style.cssText = [
+            'position:fixed', 'top:' + topPx + 'px', 'left:0', 'right:0',
+            'background:' + bg, 'color:#FFFFFF',
+            'padding:10px 16px', 'font-size:14px', 'font-weight:600',
+            'text-align:center', 'z-index:99999',
+            'box-shadow:0 2px 6px rgba(0,0,0,0.25)',
+            'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif'
+        ].join(';');
+        banner.textContent = message;
+        document.body.appendChild(banner);
+    } catch (_) {
+        try { console.error('[RACE] ' + message); } catch (__) {}
+    }
+}
+
+// Local RACE-token failure — hard-refresh fixes it (rotated under us).
+function _showAuthExpiredBanner() {
+    if (_race401LocalBannerShown) return;
+    _race401LocalBannerShown = true;
+    _renderBanner(
+        'race-auth-expired-banner',
+        '#7F1D1D',
+        'RACE session expired (local token rotated). Hard-refresh the page (Cmd/Ctrl + Shift + R) to reconnect.'
+    );
+}
+
+// Upstream Jenkins 401 — usually a stale JENKINS_TEST_API_KEY. Hard-refresh
+// will NOT fix this; the user needs to update the credential and restart RACE.
+function _showJenkinsAuthBanner() {
+    if (_race401JenkinsBannerShown) return;
+    _race401JenkinsBannerShown = true;
+    _renderBanner(
+        'race-jenkins-auth-banner',
+        '#B45309',
+        'Jenkins rejected the stored credentials (401). Update JENKINS_TEST_USERNAME / JENKINS_TEST_API_KEY (env var or .env), then restart RACE.'
+    );
+}
+
+// Thin wrapper around fetch() that attaches the X-RACE-Token header
+function apiFetch(url, opts) {
+    opts = opts || {};
+    const headers = Object.assign({}, opts.headers || {});
+    if (window.RACE_TOKEN) headers['X-RACE-Token'] = window.RACE_TOKEN;
+    if (opts.body && typeof opts.body === 'string' && !headers['Content-Type']) {
+        headers['Content-Type'] = 'application/json';
+    }
+    opts.headers = headers;
+    const p = fetch(url, opts);
+    p.then(function (resp) {
+        if (!resp || resp.status !== 401) return;
+        let authKind = '';
+        try { authKind = (resp.headers && resp.headers.get('X-RACE-Auth-Error')) || ''; } catch (_) {}
+        if (authKind === 'local-token') {
+            _showAuthExpiredBanner();
+            try {
+                if (typeof diagLog === 'function') {
+                    diagLog('warning', 'Auth',
+                        'API returned 401 — local RACE token rotated or invalid; hard-refresh required',
+                        { url: url, status: 401, kind: 'local-token' });
+                }
+            } catch (_) { /* diagnostics not loaded yet — banner is enough */ }
+        } else {
+            _showJenkinsAuthBanner();
+            try {
+                if (typeof diagLog === 'function') {
+                    diagLog('warning', 'Jenkins auth',
+                        'Upstream Jenkins returned 401 — stored JENKINS_TEST credentials may be expired or invalid',
+                        { url: url, status: 401, kind: 'upstream-jenkins' });
+                }
+            } catch (_) { /* diagnostics not loaded yet — banner is enough */ }
+        }
+    }, function () { /* network error — caller handles */ });
+    return p;
+}
+
+// SSE / EventSource URL helper — appends 
+function sseUrl(url) {
+    if (!window.RACE_TOKEN) return url;
+    const sep = url.indexOf('?') === -1 ? '?' : '&';
+    return url + sep + 'token=' + encodeURIComponent(window.RACE_TOKEN);
+}
+
 // DOM shorthand helpers.
 function $id(id) { return document.getElementById(id); }
 function show(id) { const el = $id(id); if (el) el.classList.remove('hidden'); }
@@ -137,10 +241,7 @@ function animateCounterRoll(el, target) {
     el._counterRafId = requestAnimationFrame(step);
 }
 
-//  Freshness chip helpers ─
-// The header "Data as of HH:MM:SS" pill tells release managers how current
-// the dashboard data is. Call markDataFresh() after a successful poll, or
-// markDataStale() when one fails.
+//  Freshness chip helpers
 
 function markDataFresh() {
     const chip = $id('header-freshness-chip');
@@ -209,6 +310,18 @@ function escapeHtml(text) {
     return String(text).replace(/[&<>"']/g, m => map[m]);
 }
 
+// Safe href — returns the URL ONLY if its scheme
+function safeHref(url) {
+    if (!url) return '#';
+    try {
+        const parsed = new URL(String(url), window.location.origin);
+        return /^https?:$/.test(parsed.protocol) ? String(url) : '#';
+    } catch (_) {
+        // Malformed URL → safest possible value.
+        return '#';
+    }
+}
+
 // Turn plain-text URLs inside already-escaped HTML into clickable links.
 // Used by the console-log viewer to make log URLs navigable.
 const _clvUrlRe = /\b(?:https?:\/\/|ftp:\/\/|www\.)(?:&amp;|[^\s&<>"'()[\]{}]+|\([^\s&<>"']*\))+/gi;
@@ -221,7 +334,7 @@ function clvLinkifyHtml(escapedHtml) {
     });
 }
 
-//  Query helpers 
+//  Query helpers
 
 // Job records whose table rows are currently visible (not hidden by filters).
 function getVisibleJobs() {
@@ -234,4 +347,246 @@ function getVisibleJobs() {
         }
     });
     return visible;
+}
+
+// Priority-aware sort for auto-refresh enrichment ordering.
+function sortJobUrlsByPriority(jobUrls) {
+    const visibleList = (typeof getVisibleJobs === 'function') ? getVisibleJobs() : [];
+    const visibleSet = new Set(visibleList.map(j => j.job_id || j.url));
+    const selectedSet = (window.appState && appState.selectedJobs) || new Set();
+    const jobs = (window.appState && appState.jobs) || new Map();
+    function key(jobUrl) {
+        const job = jobs.get(jobUrl);
+        if (!job) return 5;
+        if (job.is_running || job.latest_status === 'IN_PROGRESS') return 0;
+        const visible = visibleSet.has(jobUrl);
+        const selected = selectedSet.has(jobUrl);
+        if (visible && selected) return 1;
+        if (selected) return 2;
+        if (visible && (job.latest_status === 'FAILURE' || job.latest_status === 'UNSTABLE')) return 3;
+        if (visible) return 4;
+        return 5;
+    }
+    return jobUrls.slice().sort((a, b) => key(a) - key(b));
+}
+
+
+function isAnyFilterActive() {
+    const f = (window.appState && appState.filters) || {};
+    if (f.status) return true;
+    if (f.releaseStatus) return true;
+    if (f.searchText && String(f.searchText).trim()) return true;
+    if (Array.isArray(f.logAnalysisLabels) && f.logAnalysisLabels.length > 0) return true;
+    // Promotion-time category chips (passed/failed/in-progress/not-run) live
+    // in the DOM as checkboxes; treat any ticked one as an active filter.
+    const promoCats = document.querySelectorAll('.promo-cat-chip input[type="checkbox"]:checked');
+    if (promoCats.length > 0) return true;
+    return false;
+}
+
+// Single source of truth for "which jobs does this action apply to?".
+function getActionScope() {
+    const totalCount = (window.appState && appState.jobs) ? appState.jobs.size : 0;
+
+    // 1. Selection takes priority — explicit user intent.
+    if (window.appState && appState.selectedJobs && appState.selectedJobs.size > 0) {
+        const ids = Array.from(appState.selectedJobs);
+        return { jobIds: ids, label: 'selected', count: ids.length, totalCount };
+    }
+
+    // 2. Any active filter scopes to currently-visible rows.
+    if (isAnyFilterActive()) {
+        const ids = getVisibleJobs().map(j => j.job_id);
+        return { jobIds: ids, label: 'filtered', count: ids.length, totalCount };
+    }
+
+    // 3. Nothing narrowed — whole dataset.
+    const all = (window.appState && appState.jobs) ? Array.from(appState.jobs.keys()) : [];
+    return { jobIds: all, label: 'all', count: all.length, totalCount };
+}
+
+// Human-readable scope label for toasts. Example: "12 filtered jobs"
+function describeScope(scope) {
+    if (!scope || scope.count === 0) return 'no jobs';
+    if (scope.label === 'selected') {
+        return `${scope.count} selected job${scope.count === 1 ? '' : 's'}`;
+    }
+    if (scope.label === 'filtered') {
+        return `${scope.count} filtered job${scope.count === 1 ? '' : 's'}`;
+    }
+    return `all ${scope.count} job${scope.count === 1 ? '' : 's'}`;
+}
+
+function updateScopeIndicator() {
+    const stripEl = document.getElementById('scope-indicator');
+    const headerEl = document.getElementById('header-job-count');
+    const total = (window.appState && appState.jobs) ? appState.jobs.size : 0;
+
+    if (headerEl) {
+        if (total === 0) {
+            headerEl.hidden = true;
+            headerEl.innerHTML = '';
+        } else {
+            const visible = getVisibleJobs().length;
+            const selected = (window.appState && appState.selectedJobs) ? appState.selectedJobs.size : 0;
+            const filtered = isAnyFilterActive();
+            let txt = filtered
+                ? `Showing <strong>${visible}</strong> of <strong>${total}</strong> jobs`
+                : `<strong>${total}</strong> job${total === 1 ? '' : 's'}`;
+            if (selected > 0) {
+                txt += ` <span class="scope-indicator-sep">·</span> <strong>${selected}</strong> selected`;
+            }
+            headerEl.innerHTML = txt;
+            headerEl.hidden = false;
+        }
+    }
+
+    const f = (window.appState && appState.filters) || {};
+    const selected = (window.appState && appState.selectedJobs) ? appState.selectedJobs.size : 0;
+    const filtered = isAnyFilterActive();
+
+
+    const clearBtn = document.getElementById('toolbar-clear-filters');
+    if (clearBtn) {
+        clearBtn.hidden = !(filtered || selected > 0);
+    }
+
+    if (!stripEl) return;
+
+    if (total === 0 || !filtered) {
+        stripEl.classList.add('hidden');
+        stripEl.innerHTML = '';
+        return;
+    }
+    stripEl.classList.remove('hidden');
+
+
+    const chips = [];
+    if (f.status) {
+        chips.push(_scopeChip('status: ' + String(f.status).toLowerCase(), 'status', 'status'));
+    }
+    if (f.releaseStatus) {
+        chips.push(_scopeChip('release: ' + String(f.releaseStatus).toLowerCase().replace(/_/g, ' '), 'releaseStatus', 'release'));
+    }
+    if (f.searchText && String(f.searchText).trim()) {
+        chips.push(_scopeChip('search: "' + String(f.searchText).trim().slice(0, 20) + '"', 'searchText', 'search'));
+    }
+    if (Array.isArray(f.logAnalysisLabels) && f.logAnalysisLabels.length > 0) {
+        // Individual chip per label — × removes only that label.
+        for (let i = 0; i < f.logAnalysisLabels.length; i++) {
+            const label = f.logAnalysisLabels[i];
+            chips.push(_scopeChipLabel(label));
+        }
+    }
+
+    stripEl.innerHTML = chips.join(' ');
+}
+
+// Generic single-key chip. `category` selects the colour modifier
+function _scopeChip(label, filterKey, category) {
+    const modifier = category ? (' scope-filter-chip--' + category) : '';
+    return '<span class="scope-filter-chip' + modifier + '">'
+         + _escapeForAttr(label)
+         + ' <button type="button" class="scope-filter-chip-x" '
+         + 'data-action="remove-filter" '
+         + 'data-filter-key="' + escapeHtml(filterKey) + '" '
+         + 'aria-label="Remove this filter">×</button>'
+         + '</span>';
+}
+
+// Per-label chip — × removes just that label from the array. Always
+// styled as a log-analysis chip (sky-blue).
+function _scopeChipLabel(label) {
+    return '<span class="scope-filter-chip scope-filter-chip--label">'
+         + _escapeForAttr(label)
+         + ' <button type="button" class="scope-filter-chip-x" '
+         + 'data-action="remove-label" '
+         + 'data-label="' + escapeHtml(label) + '" '
+         + 'aria-label="Remove label filter">×</button>'
+         + '</span>';
+}
+
+// Document-level delegation so chip-x clicks survive every #scope-indicator repaint.
+let _scopeChipDelegationInstalled = false;
+function _installScopeChipDelegation() {
+    if (_scopeChipDelegationInstalled) return;
+    _scopeChipDelegationInstalled = true;
+    document.addEventListener('click', function (e) {
+        const btn = e.target && e.target.closest && e.target.closest('.scope-filter-chip-x');
+        if (!btn) return;
+        const action = btn.getAttribute('data-action');
+        if (action === 'remove-filter') {
+            const key = btn.getAttribute('data-filter-key') || '';
+            if (typeof _scopeChipRemove === 'function') _scopeChipRemove(key);
+        } else if (action === 'remove-label') {
+            const label = btn.getAttribute('data-label') || '';
+            if (typeof _scopeChipRemoveLabel === 'function') _scopeChipRemoveLabel(label);
+        }
+    });
+}
+if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _installScopeChipDelegation);
+    } else {
+        _installScopeChipDelegation();
+    }
+}
+
+function _scopeChipRemove(filterKey) {
+    if (!window.appState || !appState.filters) return;
+    if (filterKey === 'status') {
+        appState.filters.status = null;
+        var s = document.getElementById('filter-status'); if (s) s.value = '';
+    } else if (filterKey === 'releaseStatus') {
+        appState.filters.releaseStatus = null;
+        var r = document.getElementById('filter-release-status'); if (r) r.value = '';
+    } else if (filterKey === 'searchText') {
+        appState.filters.searchText = '';
+        var q = document.getElementById('filter-search'); if (q) q.value = '';
+    } else if (filterKey === 'logAnalysisLabels') {
+        appState.filters.logAnalysisLabels = [];
+        if (typeof clearLogAnalysisFilter === 'function') clearLogAnalysisFilter();
+    }
+    if (typeof applyFilters === 'function') applyFilters();
+    scrollTableToTop();
+}
+
+// Remove ONE label from the log-analysis array; preserve the rest.
+function _scopeChipRemoveLabel(label) {
+    if (!window.appState || !appState.filters) return;
+    const arr = appState.filters.logAnalysisLabels;
+    if (!Array.isArray(arr)) return;
+    appState.filters.logAnalysisLabels = arr.filter(l => l !== label);
+    // If the LA filter UI tracks selections itself, keep it in sync.
+    if (typeof syncLogAnalysisFilterUI === 'function') {
+        syncLogAnalysisFilterUI();
+    }
+    if (typeof applyFilters === 'function') applyFilters();
+    scrollTableToTop();
+}
+
+// Snap the jobs table back to the top — used after filter/sort changes.
+function scrollTableToTop() {
+    var container = document.querySelector('.table-container');
+    if (container && typeof container.scrollTo === 'function') {
+        container.scrollTo({ top: 0, behavior: 'auto' });
+    } else if (container) {
+        container.scrollTop = 0;
+    }
+    // Also nudge the page itself so the table header is in view 
+    var table = document.getElementById('job-table');
+    if (table && typeof table.scrollIntoView === 'function') {
+        // Use 'nearest' so we don't jump if it's already on-screen.
+        try { table.scrollIntoView({ block: 'nearest', behavior: 'auto' }); } catch (_) {}
+    }
+}
+
+// All 5 chars — safe for any HTML attribute context, not just text bodies.
+function _escapeForAttr(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }

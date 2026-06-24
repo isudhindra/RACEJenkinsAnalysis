@@ -920,11 +920,9 @@ function populateReleaseStatusFilter() {
 }
 
 
-//  Clear-filters button — active-count + disabled state ─
-// Counts every "undoable thing": the four filters plus row selection. Hidden
-// when zero, shown with a count badge otherwise. Driven by _applyFiltersImpl
-// and the selection helpers so any active state lights it up.
+//  Clear-filters button — active-count + disabled state
 function updateClearFiltersButton() {
+    if (typeof updateScopeIndicator === 'function') updateScopeIndicator();
     const btn = document.getElementById('btn-clear-filters');
     if (!btn) return;
     const f = (window.appState && appState.filters) || {};

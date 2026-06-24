@@ -8,7 +8,7 @@ function renderCheckboxCell(job) {
 // Job name as a link to its Jenkins page; full path on the title attribute for hover recovery.
 function renderJobNameCell(job) {
     const fullName = job.full_name || job.name || '';
-    return `<td class="job-name-cell cell-job-name"><a href="${escapeHtml(job.url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(fullName)}">${escapeHtml(job.name)}</a></td>`;
+    return `<td class="job-name-cell cell-job-name"><a href="${escapeHtml(safeHref(job.url))}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(fullName)}">${escapeHtml(job.name)}</a></td>`;
 }
 
 // 5-square mini timeline of the job's last 5 build statuses (oldest left → newest right).
@@ -164,17 +164,28 @@ function renderLogAnalysisChips(classification, jobStatus) {
         return '<span class="text-muted">—</span>';
     }
 
+    // Append the rule-extracted detail 
+    var primaryRuleName = classification.matched_rule_name || '';
+    var evidenceDetail = (classification.evidence_detail || '').trim();
+    function _composeTip(baseTip, ruleName) {
+        if (evidenceDetail && ruleName === primaryRuleName) {
+            // Two-line tooltip: action text on first line, focused detail on second.
+            return (baseTip ? baseTip + '\n\n' : '') + 'Missing: ' + evidenceDetail;
+        }
+        return baseTip || '';
+    }
+
     // Unify the multi-label and single-label cases into one entries[] list.
     var entries = [];
     var labels = classification.all_labels;
     if (labels && labels.length > 0) {
         entries = labels.map(function(e) {
-            return { label: e.label, color: _domainColorMap[e.domain] || 'gray', tip: e.action || '' };
+            return { label: e.label, color: _domainColorMap[e.domain] || 'gray', tip: _composeTip(e.action || '', e.rule_name) };
         });
     } else {
         var lbl = classification.label;
         var dom = classification.primary_domain || 'Unknown';
-        entries = [{ label: lbl, color: _domainColorMap[dom] || 'gray', tip: classification.action || '' }];
+        entries = [{ label: lbl, color: _domainColorMap[dom] || 'gray', tip: _composeTip(classification.action || '', primaryRuleName) }];
     }
 
     if (entries.length <= 1) {

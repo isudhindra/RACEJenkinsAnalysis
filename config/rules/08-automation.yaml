@@ -39,23 +39,6 @@ rules:
     action: "Multiple step definitions match the same Gherkin step. Tighten one of the regex/expressions."
     scope: "global"
 
-  # ─ Catch-alls (priority ≥ 700) ─
-  # These match very generic patterns so anything specific in another
-  # file beats them.  Keep priorities in 700-999 reserved for fallbacks
-  # of this kind.
-
-  - name: "cucumber_step_failed"
-    priority: 700
-    domain: "Automation / Framework"
-    subcategory: "Cucumber Step Failed"
-    impact: "Test Issue"
-    label: "Cucumber Step Failed"
-    patterns:
-      - "Test failed at step:"
-      - "Failed scenarios:"
-    action: "A Cucumber step failed but no specific rule matched it. Look at the line beginning 'Test failed at step:' for the failing step and read the lines around it for the immediate cause."
-    scope: "global"
-
   - name: "generic_npe"
     priority: 800
     domain: "Automation / Framework"
@@ -65,7 +48,16 @@ rules:
     patterns:
       - "java\\.lang\\.NullPointerException"
       - "Cannot invoke .* because .* is null"
-    action: "Null reference somewhere in step or page object. Read the stack trace for the offending line."
+      - "Cannot invoke method on null object"           # Groovy / Spock
+      - "Cannot read property '[^']+' of (?:null|undefined)"   # JS frontends
+    # Pull out the first non-framework stack frame's File.java:NNN so the
+    # dashboard surfaces the actual offending line as evidence_detail.
+    # The negative lookahead skips JVM internals and common test frameworks
+    # (Thucydides/Serenity, Cucumber, JUnit, ByteBuddy, Selenium) so the
+    # extracted location is almost always project code. Frames without a
+    # "File.java:NNN" (e.g. "Unknown Source") are naturally skipped.
+    extract_pattern: "at\\s+(?!(?:java|jdk|sun|net\\.thucydides|net\\.serenitybdd|io\\.cucumber|org\\.junit|org\\.openqa\\.selenium|net\\.bytebuddy)\\b)[\\w.$/]+\\((?P<source>[\\w$]+\\.java:\\d+)\\)"
+    action: "Null reference in a step or page object. evidence_detail names the file:line — start there."
     scope: "global"
 
   - name: "generic_exception"

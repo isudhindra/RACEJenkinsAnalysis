@@ -1,7 +1,7 @@
 """Entry point — preserves the `python app.py` workflow.
 
 This file is intentionally tiny.  All Flask routes, models, and the
-Jenkins client live inside the ``jjat`` package at the repo root.
+Jenkins client live inside the ``race`` package at the repo root.
 Keeping the entry script at the project root means existing
 instructions ("from the project folder, run ``python app.py``") still
 work, the ``analyseJenkins`` shell alias still works, and IDE
@@ -13,7 +13,7 @@ Workflow:
     # or, after running scripts/setup.sh:
     analyseJenkins
 
-The ``jjat`` package is a sibling directory of this file, so Python
+The ``race`` package is a sibling directory of this file, so Python
 finds it on the default ``sys.path`` (cwd) — no path manipulation
 needed.
 """
@@ -23,7 +23,7 @@ import threading
 import time
 import webbrowser
 
-from jjat.application import create_app
+from race.application import create_app
 
 # Build the Flask app at module load so WSGI servers (gunicorn,
 # uvicorn-asgi-bridge, etc.) can import `app` directly:  `gunicorn app:app`.
@@ -46,7 +46,7 @@ def _open_browser_after_delay(url: str, delay_seconds: float = 1.5) -> None:
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("JJAT_PORT", "5000"))
+    port = int(os.environ.get("RACE_PORT", "5000"))
     url = f"http://127.0.0.1:{port}"
 
     # Auto-open the browser on first launch, in a daemon thread so it

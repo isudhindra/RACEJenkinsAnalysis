@@ -47,6 +47,7 @@ function _syncHeaderAndToolbar() {
         allCheckbox.indeterminate = checkedCount > 0 && checkedCount < visibleCbs.length;
     }
     if (typeof updateToolbarActions === 'function') updateToolbarActions();
+    if (typeof updateScopeIndicator === 'function') updateScopeIndicator();
     // Selection counts toward Clear button's badge.
     if (typeof updateClearFiltersButton === 'function') updateClearFiltersButton();
 }

@@ -162,7 +162,7 @@ async function refreshSingleJob(jobId) {
     const jobName = existingJob ? existingJob.name : jobId.split('/').pop();
 
     try {
-        const resp = await fetch('/api/refresh-single', {
+        const resp = await apiFetch('/api/refresh-single', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -245,7 +245,7 @@ async function requestOnDemandAnalysis(jobId, jobName) {
     if (!creds) return;
 
     try {
-        const response = await fetch('/api/analyze-on-demand', {
+        const response = await apiFetch('/api/analyze-on-demand', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -341,6 +341,7 @@ function clearAllFilters() {
 
     // Re-read inputs, toggle row visibility, refresh the Clear button's count badge.
     if (typeof applyFilters === 'function') applyFilters();
+    if (typeof scrollTableToTop === 'function') scrollTableToTop();
 }
 
 // Full reset called before Fetch Jobs or Full Refresh — starts with a clean slate.

@@ -3,6 +3,17 @@
 # change, not a product bug.
 
 rules:
+  - name: "selenium_click_wait_timeout"
+    priority: 9
+    domain: "UI / Locator"
+    subcategory: "Wait For Clickable Timeout"
+    impact: "Test Issue"
+    label: "Element Not Clickable"
+    patterns:
+      - "Expected condition failed: waiting for element to be clickable"
+    action: "Element appeared but didn't become clickable in time. Look for blocking overlays, disabled states, or animations that delay interactability — fixing the locator usually won't help."
+    scope: "global"
+
   - name: "ui_element_wait_timeout"
     priority: 8
     domain: "UI / Locator"

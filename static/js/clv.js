@@ -19,12 +19,125 @@ const clvState = {
     errorBlocks: [],        // [{ startIdx, endIdx, anchorIdx }]
     errorBlockCursor: -1,
     parsedScenarios: [],
-    phase: 'idle',          // 'idle' | 'loading' | 'ready'
+    phase: 'idle',          // 'idle' | 'loading' | 'ready' | 'shrunk'
     abortController: null,
     cachedSource: false,
     domWindowStart: 0,      // first filteredIndices position kept in the DOM
     domWindowSize: 600,     // max lines to keep in DOM (virtualisation cap)
+    // — Idle-shrink bookkeeping
+    idleTimer: null,
+    lastActivityAt: 0,
+    lastJobUrl: '',
+    lastBuildNum: '',
+    lastJobName: '',
+    lastScrollTop: 0,
 };
+
+// 2 minutes of inactivity → release heavy buffers.
+const IDLE_SHRINK_MS = 120 * 1000;
+
+// Reset the idle timer whenever the user interacts with the CLV. Cheap:
+// constant time, no allocation beyond the timeout handle.
+function clvMarkActive() {
+    if (clvState.phase === 'idle') return;     // modal isn't open
+    clvState.lastActivityAt = Date.now();
+    if (clvState.idleTimer) clearTimeout(clvState.idleTimer);
+    clvState.idleTimer = setTimeout(clvShrinkOnIdle, IDLE_SHRINK_MS);
+}
+
+// Release the heavy CLV buffers + DOM and replace the body with a
+// placeholder + Reload button. Keeps only the metadata needed to
+// rehydrate via the existing fetch path. Called by the idle timer.
+function clvShrinkOnIdle() {
+    if (clvState.phase !== 'ready' && clvState.phase !== 'loading') return;
+
+    const beforeLines = clvState.rawLines.length;
+    const body = document.getElementById('clv-body');
+    if (body) clvState.lastScrollTop = body.scrollTop || 0;
+
+    // Cancel any in-flight fetch — a half-loaded log that the user
+    // walked away from is the worst case for retained memory.
+    if (clvState.abortController) {
+        try { clvState.abortController.abort(); } catch (_) {}
+        clvState.abortController = null;
+    }
+
+    // Drop every heavy buffer the audit identified.
+    clvState.rawLines = [];
+    clvState.filteredIndices = [];
+    clvState.searchMatches = [];
+    clvState.errorIndices = [];
+    clvState.errorBlocks = [];
+    clvState.errorBlockCursor = -1;
+    clvState.parsedScenarios = [];
+    clvState.renderedUpTo = 0;
+    clvState.domWindowStart = 0;
+    clvState.searchTerm = '';
+    clvState.searchCursor = -1;
+    clvState.phase = 'shrunk';
+
+    // DOM teardown — also releases per-row event listeners.
+    const container = document.getElementById('clv-log-container');
+    if (container) container.innerHTML = '';
+
+    // Disconnect observer + scroll listener so they don't fire on the
+    // placeholder. clvOpen / Reload re-attaches them.
+    if (clvState.observer) {
+        clvState.observer.disconnect();
+        clvState.observer = null;
+    }
+    if (body) body.removeEventListener('scroll', clvOnBodyScroll);
+    if (_clvRecycleTimer) { clearTimeout(_clvRecycleTimer); _clvRecycleTimer = null; }
+
+    clvState.idleTimer = null;
+
+    // Replace the body with a small "released" notice + Reload button.
+    if (container) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'clv-idle-placeholder';
+        placeholder.innerHTML =
+            '<div class="clv-idle-icon">⏸</div>' +
+            '<div class="clv-idle-msg">Log released after 2 minutes of inactivity to reduce memory usage.</div>' +
+            '<button type="button" class="clv-idle-reload" id="clv-idle-reload">Reload</button>';
+        container.appendChild(placeholder);
+        const btn = placeholder.querySelector('#clv-idle-reload');
+        if (btn) btn.addEventListener('click', clvReloadAfterIdle);
+    }
+
+    // Visual: dim the toolbar + summary so the user knows the data
+    // backing them is gone until a reload.
+    const tb = document.getElementById('clv-toolbar');
+    if (tb) { tb.classList.add('clv-toolbar--gated'); tb.classList.remove('clv-toolbar--ready'); }
+    const sm = document.getElementById('clv-summary');
+    if (sm) { sm.classList.add('clv-summary--gated'); sm.classList.remove('clv-summary--ready'); }
+
+    // Approx freed bytes for the diag/debug log. We don't measure DOM,
+    // just the JS-side string footprint as a proxy. 2 bytes per UTF-16
+    // char gives a reasonable rough estimate.
+    var approxKb = Math.round((beforeLines * 80) / 1024);
+    var detail = beforeLines.toLocaleString() + ' lines released (~' + approxKb + ' KB)';
+    console.debug('[CLV] idle-shrink fired:', detail);
+    if (typeof diagLog === 'function') {
+        diagLog('info', 'CLV', 'Idle shrink', { raw: detail });
+    }
+}
+
+// Reload after an idle-shrink. Uses the existing fetch path so all the
+// streaming, gzip, and error handling stays unified.
+function clvReloadAfterIdle() {
+    if (!clvState.lastJobUrl || !clvState.lastBuildNum) {
+        console.warn('[CLV] reload requested but no job metadata retained');
+        return;
+    }
+    var container = document.getElementById('clv-log-container');
+    if (container) container.innerHTML = '';
+    var loading = document.getElementById('clv-loading');
+    if (loading) loading.style.display = 'flex';
+    var msg = document.getElementById('clv-loading-msg');
+    if (msg) msg.textContent = 'Reloading console log...';
+    clvState.phase = 'loading';
+    clvFetch(clvState.lastJobUrl, clvState.lastBuildNum);
+}
 
 // Open the CLV modal for a job, fetch its console log, and begin rendering.
 function clvOpen(jobId) {
@@ -149,7 +262,15 @@ function clvOpen(jobId) {
         el.setAttribute('aria-hidden', 'false');
     }
 
+    // Stash metadata so Reload (after idle-shrink) can re-fetch without
+    // re-walking appState. lastScrollTop is captured at shrink time.
+    clvState.lastJobUrl = jobUrl;
+    clvState.lastBuildNum = buildNum;
+    clvState.lastJobName = job.name || job.job_name || '';
+    clvState.lastScrollTop = 0;
+
     clvFetch(jobUrl, buildNum);
+    clvMarkActive();
 }
 
 // Fetch the console log. Handles both cached text/plain streams and SSE-with-progress.
@@ -160,7 +281,7 @@ async function clvFetch(jobUrl, buildNum) {
     try {
         const creds = ensureCredentials();
         if (!creds) throw new Error('Jenkins credentials not available');
-        const resp = await fetch('/api/console-log', {
+        const resp = await apiFetch('/api/console-log', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -335,11 +456,24 @@ function clvActivateAnalysis() {
             srcCtx.textContent = existing ? existing + ' • Cached' : 'Served from cache';
         }
     }
+
+    // After an idle-shrink → Reload, jump back to the last scroll
+    // position so the user doesn't lose their place. RAF gives layout
+    // a chance to settle before we read scrollTop.
+    if (clvState.lastScrollTop > 0) {
+        var savedTop = clvState.lastScrollTop;
+        clvState.lastScrollTop = 0;
+        requestAnimationFrame(function() {
+            var body = document.getElementById('clv-body');
+            if (body) body.scrollTop = savedTop;
+        });
+    }
+
+    // Arm the idle timer now that the log is fully loaded and visible.
+    clvMarkActive();
 }
 
-// Line classifier rules — priority-ordered, first match wins. `cls` feeds
-// filters, rendering, and stats. Covers Cucumber, Jenkins pipeline, Java/JVM,
-// Playwright/Cypress, Node, and generic test runners.
+// Line classifier rules
 const CLV_PATTERNS = [
 
     //  Cucumber: step markers (unicode) 
@@ -624,6 +758,7 @@ let _clvRecycleTimer = null;
 
 // Debounce scroll-driven DOM recycling so fast scrolls don't thrash.
 function clvOnBodyScroll() {
+    clvMarkActive();
     if (_clvRecycleTimer) return;
     _clvRecycleTimer = setTimeout(() => {
         _clvRecycleTimer = null;
@@ -820,6 +955,7 @@ function _clvScrollToErrorBlock(cursorIdx) {
 
 // Jump between error blocks (first / next / prev). Skips blocks already in view.
 function clvErrNav(action) {
+    clvMarkActive();
     if (clvState.phase !== 'ready') return;
     const blocks = clvState.errorBlocks;
     if (blocks.length === 0) return;
@@ -867,6 +1003,7 @@ function clvErrNav(action) {
 
 // Switch the active filter and rebuild the log view.
 function clvSetFilter(filter) {
+    clvMarkActive();
     clvState.activeFilter = filter;
     document.querySelectorAll('.clv-filter-btn').forEach(b =>
         b.classList.toggle('active', b.dataset.clvFilter === filter));
@@ -973,6 +1110,7 @@ function clvJumpToFirstError() {
 
 // Search for a term across filtered lines and jump to the first match.
 function clvSearch(term) {
+    clvMarkActive();
     clvState.searchTerm = term.toLowerCase();
     clvState.searchMatches = [];
     clvState.searchCursor = -1;
@@ -1106,6 +1244,7 @@ function clvHighlightTermInTextNodes(root, term) {
 
 // Step to the next/previous search match.
 function clvSearchNav(direction) {
+    clvMarkActive();
     if (clvState.searchMatches.length === 0) return;
 
     document.querySelectorAll('.clv-match-active').forEach(el => el.classList.remove('clv-match-active'));
@@ -1317,6 +1456,10 @@ function clvClose() {
 
     if (_clvRecycleTimer) { clearTimeout(_clvRecycleTimer); _clvRecycleTimer = null; }
 
+    // Idle-shrink timer must die with the modal — otherwise it would
+    // fire later and try to shrink state that's already been wiped.
+    if (clvState.idleTimer) { clearTimeout(clvState.idleTimer); clvState.idleTimer = null; }
+
     document.getElementById('clv-log-container').innerHTML = '';
     clvState.rawLines = [];
     clvState.filteredIndices = [];
@@ -1329,6 +1472,12 @@ function clvClose() {
     clvState.phase = 'idle';
     clvState.cachedSource = false;
     clvState.domWindowStart = 0;
+    // Metadata can go too — nothing references it once the modal is shut.
+    clvState.lastJobUrl = '';
+    clvState.lastBuildNum = '';
+    clvState.lastJobName = '';
+    clvState.lastScrollTop = 0;
+    clvState.lastActivityAt = 0;
 
     if (clvState.observer) {
         clvState.observer.disconnect();

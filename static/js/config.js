@@ -151,7 +151,7 @@ async function authenticateCredentials() {
     const timer = _runElapsedTimer(statusEl, 'Connecting to Jenkins…');
 
     try {
-        const resp = await fetch('/api/validate', {
+        const resp = await apiFetch('/api/validate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jenkins_url: jenkinsUrl, username, api_token: token })
@@ -185,7 +185,7 @@ async function checkEnvCredentials() {
 
     let data;
     try {
-        const resp = await fetch('/api/env-credentials-check');
+        const resp = await apiFetch('/api/env-credentials-check');
         data = await resp.json();
     } catch (err) {
         if (typeof diagLog === 'function') {
@@ -248,7 +248,7 @@ async function authenticateWithEnvCredentials() {
     const timer = _runElapsedTimer(statusEl, 'Connecting to Jenkins…');
 
     try {
-        const resp = await fetch('/api/env-validate', {
+        const resp = await apiFetch('/api/env-validate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jenkins_url: jenkinsUrl })
@@ -317,8 +317,7 @@ function unlockAuth(e) {
             envBtn.disabled = false;
         }
     } else {
-        // First-load probe may have failed (network blip or DOM not ready).
-        // Retry now so the env-auth button still gets a chance to appear.
+        // First-load probe may have failed (network blip or DOM not ready)
         checkEnvCredentials();
     }
 
@@ -352,7 +351,7 @@ async function discoverViews(jenkinsUrl, username, token) {
     const instanceId = appState.selectedInstance ? appState.selectedInstance.id : '';
 
     try {
-        const resp = await fetch('/api/discover-views', {
+        const resp = await apiFetch('/api/discover-views', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jenkins_url: jenkinsUrl, username, api_token: token })
@@ -433,7 +432,7 @@ function populateJobListDropdown() {
     }
 
     // Group 2: all on-disk lists. Fetched async so the dropdown opens without delay.
-    fetch('/api/list-available-job-lists')
+    apiFetch('/api/list-available-job-lists')
         .then(r => r.ok ? r.json() : { lists: [] })
         .then(data => {
             const lists = (data && data.lists) || [];
@@ -504,7 +503,7 @@ async function onJobListChange() {
     }
 
     try {
-        const resp = await fetch('/api/load-job-list', {
+        const resp = await apiFetch('/api/load-job-list', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ job_list_file: filePath })
@@ -524,7 +523,8 @@ async function onJobListChange() {
         const humanName = (selectedOption && selectedOption.textContent) || data.name;
 
         appState.customJobList = { jobs: data.jobs, name: humanName };
-        countEl.innerHTML = '<strong>' + data.count + ' jobs</strong> in ' + humanName;
+        // humanName is Jenkins-supplied — escape it; coerce the count.
+        countEl.innerHTML = '<strong>' + Number(data.count) + ' jobs</strong> in ' + escapeHtml(humanName);
         countEl.style.display = 'block';
 
         // Restore the env's stored promotion time so the per-env baseline
@@ -581,7 +581,7 @@ function onJobListUpload(event) {
             appState.customJobList = { jobs, name };
 
             const countEl = document.getElementById('joblist-job-count');
-            countEl.innerHTML = '<strong>' + jobs.length + ' jobs</strong> from uploaded file';
+            countEl.innerHTML = '<strong>' + Number(jobs.length) + ' jobs</strong> from uploaded file';
             countEl.style.display = 'block';
 
             document.getElementById('cfg-joblist-select').value = '';
@@ -641,7 +641,7 @@ async function onViewChange() {
         const countTimer = _runElapsedTimer(countEl, 'Counting jobs in ' + viewName + '…');
 
         try {
-            const resp = await fetch('/api/discover-view-jobs-count', {
+            const resp = await apiFetch('/api/discover-view-jobs-count', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -660,7 +660,8 @@ async function onViewChange() {
                 return;
             }
 
-            countEl.innerHTML = '<strong>' + data.count + ' jobs</strong> in ' + (data.view_name || 'this view');
+            // view_name is Jenkins-supplied — escape it; coerce the count.
+            countEl.innerHTML = '<strong>' + Number(data.count) + ' jobs</strong> in ' + escapeHtml(data.view_name || 'this view');
         } catch (err) {
             countTimer.stop();
             countEl.style.display = 'none';
@@ -702,7 +703,8 @@ function updateConfigChips() {
         let displayHost;
         try { displayHost = new URL(appState.authCredentials.jenkins_url).hostname; }
         catch { displayHost = appState.authCredentials.jenkins_url; }
-        html += '<span class="config-chip chip-auth-ok"><span class="chip-dot"></span>' + appState.authCredentials.username + '@' + displayHost + '</span>';
+        // Username (user-supplied) and host (Jenkins-derived) both need escaping.
+        html += '<span class="config-chip chip-auth-ok"><span class="chip-dot"></span>' + escapeHtml(appState.authCredentials.username) + '@' + escapeHtml(displayHost) + '</span>';
     } else {
         html += '<span class="config-chip chip-auth-none"><span class="chip-dot"></span>Not authenticated</span>';
     }
@@ -710,11 +712,13 @@ function updateConfigChips() {
     if (appState.sourceMode === 'view') {
         const viewSelect = document.getElementById('cfg-view-select');
         if (viewSelect.value && viewSelect.value !== '') {
+            // viewName comes from Jenkins via <select> options.
             const viewName = viewSelect.options[viewSelect.selectedIndex].text;
-            html += '<span class="config-chip chip-view"><span class="chip-dot"></span>' + viewName + '</span>';
+            html += '<span class="config-chip chip-view"><span class="chip-dot"></span>' + escapeHtml(viewName) + '</span>';
         }
     } else if (appState.sourceMode === 'job_list' && appState.customJobList) {
-        html += '<span class="config-chip chip-view"><span class="chip-dot"></span>' + appState.customJobList.name + ' (' + appState.customJobList.jobs.length + ' jobs)</span>';
+        // customJobList.name comes from the uploaded JSON.
+        html += '<span class="config-chip chip-view"><span class="chip-dot"></span>' + escapeHtml(appState.customJobList.name) + ' (' + Number(appState.customJobList.jobs.length) + ' jobs)</span>';
     }
 
     chips.innerHTML = html;
@@ -769,7 +773,8 @@ function updateFetchButtonState(btn, btnRefresh, btnRefreshFailed, state) {
 
 function updateFetchSummary(summary, state) {
     if (appState.authCredentials && state.sourceReady) {
-        summary.innerHTML = 'Ready to fetch from <strong>' + state.sourceName + '</strong>';
+        // sourceName chains through Jenkins / user-uploaded job list.
+        summary.innerHTML = 'Ready to fetch from <strong>' + escapeHtml(state.sourceName) + '</strong>';
     } else if (appState.authCredentials) {
         summary.textContent = appState.sourceMode === 'view' ? 'Select a Jenkins view to continue' : 'Select a job list to continue';
     } else {
@@ -816,6 +821,13 @@ function clearSession() {
         status: null,
         searchText: ''
     };
+
+    // Wipe persistent stores too
+    try {
+        localStorage.removeItem('race.saved_views');
+        localStorage.removeItem('auto_refresh_enabled');
+        sessionStorage.removeItem('promotion_times');
+    } catch (_) { /* private mode or storage disabled */ }
 
     if (appState._fetchAbortController) {
         appState._fetchAbortController.abort();

@@ -69,7 +69,7 @@ function analyseJenkins {
             }
         }
         if (-not `$venvDir) {
-            Write-Host "venv missing — run: py -3 -m venv venv; .\venv\Scripts\Activate.ps1; pip install Flask requests PyYAML"
+            Write-Host "venv missing — run: py -3 -m venv venv; .\venv\Scripts\Activate.ps1; pip install -r requirements.lock.txt; pip install -e . --no-deps"
             return
         }
         & (Join-Path `$venvDir 'Scripts\Activate.ps1')

@@ -5,11 +5,11 @@
 //   openSavedViewsDropdown / saveCurrentView / applySavedView / deleteSavedView
 'use strict';
 
-const SAVED_VIEWS_KEY = 'jjat.saved_views';
+const SAVED_VIEWS_KEY = 'race.saved_views';
 const SAVED_VIEWS_MAX = 25;   // cap to keep storage tidy and menu scannable
 
 
-//  Persistence 
+//  Persistence
 
 function _readSavedViews() {
     try {
@@ -185,18 +185,35 @@ function _renderMenu() {
             const safeName = escapeHtml(v.name);
             const safeMeta = escapeHtml(_describeSnapshot(v.snapshot));
             html += `
-                <div class="ops-saved-view-row">
-                    <button class="ops-dropdown-item ops-saved-view-apply" onclick="applySavedView('${safeName.replace(/'/g, "\\'")}'); closeOpsDropdowns()" title="${safeMeta}">
+                <div class="ops-saved-view-row" data-name="${safeName}">
+                    <button class="ops-dropdown-item ops-saved-view-apply" type="button" title="${safeMeta}">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                         <span class="ops-saved-view-name">${safeName}</span>
                         <span class="ops-saved-view-meta">${safeMeta}</span>
                     </button>
-                    <button class="ops-saved-view-delete" onclick="deleteSavedView('${safeName.replace(/'/g, "\\'")}'); event.stopPropagation()" title="Delete">×</button>
+                    <button class="ops-saved-view-delete" type="button" title="Delete">×</button>
                 </div>
             `;
         }
     }
     menu.innerHTML = html;
+    menu.querySelectorAll('.ops-saved-view-row').forEach(row => {
+        const name = row.getAttribute('data-name') || '';
+        const applyBtn = row.querySelector('.ops-saved-view-apply');
+        const delBtn = row.querySelector('.ops-saved-view-delete');
+        if (applyBtn) {
+            applyBtn.addEventListener('click', () => {
+                applySavedView(name);
+                if (typeof closeOpsDropdowns === 'function') closeOpsDropdowns();
+            });
+        }
+        if (delBtn) {
+            delBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteSavedView(name);
+            });
+        }
+    });
 }
 
 function _describeSnapshot(s) {

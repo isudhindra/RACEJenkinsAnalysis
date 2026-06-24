@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JJAT - Jenkins Job Analysis Tool</title>
+    <!-- Local API token — apiFetch() attaches X-RACE-Token from window.RACE_TOKEN. -->
+    <meta name="race-token" content="{{ local_api_token }}">
+    <title>RACE — Release Assurance & Confidence Engine</title>
     <!-- Base styles. Theme override below cascades on top. -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ asset_v }}">
     <!-- Brutalist black-border theme. Loaded last so it wins the cascade. -->
@@ -13,26 +15,28 @@
     {% include 'partials/_icon_sprite.html' %}
 
     <header class="app-header">
-        <!-- Animated header background. -->
-
+        
         <canvas id="header-canvas" class="header-canvas"></canvas>
-        <div class="app-header-spacer"></div>
-        <div class="app-header-brand">
+        <div class="app-header-left">
             <div class="app-header-logo">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-                </svg>
-            </div>
-            <div class="app-header-title">
-                <div class="app-header-title-row">
-                    <h1>Jenkins Job Analysis Tool</h1>
-                </div>
-                <span class="app-header-subtitle" id="header-env-label">Failure Classification & Triage</span>
+                <img src="{{ url_for('static', filename='img/Logo.png', v=asset_v) }}"
+                     alt="RACE logo"
+                     class="app-header-logo-img" />
             </div>
         </div>
-        <div class="app-header-spacer"></div>
-        <div class="app-header-actions">
-            <span class="header-credit">Created by Sudhindra Immidi</span>
+        <div class="app-header-center">
+            <div class="app-header-title">
+                <div class="app-header-title-row">
+                    <h1>Release Assurance &amp; Confidence Engine</h1>
+                </div>
+                <div class="brand-pillars" aria-label="Product capabilities">
+                    <span class="brand-pillar">Live Validation</span>
+                    <span class="brand-pillar">Failure Intelligence</span>
+                    <span class="brand-pillar">Rerun Control</span>
+                </div>
+            </div>
+        </div>
+        <div class="app-header-right app-header-actions">
             <!-- "Data as of …" pill. Turns red when polling has been failing
                  for more than 2 minutes so users know the view is stale. -->
             <div class="header-freshness-chip" id="header-freshness-chip" hidden
@@ -45,6 +49,14 @@
                 <div class="header-status-dot" id="header-status-dot"></div>
                 <span class="header-status-label" id="header-status-label">Idle</span>
             </div>
+            
+            <button class="header-icon-btn rule-test-toggle-btn" id="rule-test-toggle-btn"
+                    onclick="toggleRuleTestPanel()"
+                    type="button"
+                    aria-label="Open classification rule sandbox"
+                    title="Test a classification rule">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6.5L4.5 19a2 2 0 0 0 1.7 3h11.6a2 2 0 0 0 1.7-3L14 9.5V3"/><line x1="8" y1="14" x2="16" y2="14"/></svg>
+            </button>
             <!-- Diagnostics toggle. Lives in the header (not the toolbar)
                  because it's a developer-only meta control. -->
             <button class="header-icon-btn diag-toggle-btn" id="diag-toggle-btn"
@@ -147,6 +159,9 @@
                         </span>
                     </div>
                 </div>
+                <!-- Job count badge — loaded / visible / selected totals.
+                     Populated by updateScopeIndicator() in utils.js. -->
+                <span id="header-job-count" class="header-job-count" hidden></span>
                 <svg class="config-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="6 9 12 15 18 9"/>
                 </svg>
@@ -420,6 +435,7 @@
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                         <span class="btn-auto-refresh-label">Auto</span>
                     </button>
+
                     <!-- Saved Views: bookmark and restore filter/sort/promotion combinations. -->
                     <div class="ops-dropdown" id="ops-saved-views-dropdown" data-fv-disable>
                         <button class="ops-btn ops-btn-secondary ops-dropdown-trigger"
@@ -497,14 +513,8 @@
                             <button class="ops-dropdown-item" id="ops-rerun-selected" onclick="triggerRerunSelected(); closeOpsDropdowns()" style="display:none"><svg width="12" height="12"><use href="#icon-refresh-ccw"/></svg>Rerun Selected <span class="ops-badge" id="ops-selected-count"></span></button>
                         </div>
                     </div>
-                    <div class="ops-sep"></div>
-                    <button class="ops-btn ops-btn-secondary" onclick="exportCSV()" type="button"
-                            title="Export current view to CSV">
-                        <svg width="13" height="13"><use href="#icon-download"/></svg>
-                        <span class="ops-btn-label">CSV</span>
-                    </button>
-                    <!-- Failures view toggle. Always present (greyed via .is-empty when
-                         count is 0) so release managers learn its location. -->
+                    <!-- Failures view toggle stays primary — most-used button daily.
+                         Always present (greyed via .is-empty when count is 0). -->
                     <button class="ops-btn ops-btn-action is-empty" id="ops-failure-view"
                             onclick="toggleFailureView()" type="button"
                             aria-pressed="false"
@@ -513,6 +523,24 @@
                         <span id="ops-failure-view-label">Failures</span>
                         <span class="ops-badge ops-badge-danger" id="ops-failure-count">0</span>
                     </button>
+                    <!-- More menu — overflow for secondary actions (CSV today;
+                         future home for reports, diagnostics, audit log). -->
+                    <div class="ops-dropdown" id="ops-more-dropdown" data-fv-disable>
+                        <button class="ops-btn ops-btn-secondary ops-dropdown-trigger"
+                                onclick="toggleOpsDropdown('ops-more-dropdown')" type="button"
+                                aria-haspopup="menu" aria-expanded="false"
+                                title="More actions">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+                            <span class="ops-btn-label">More</span>
+                            <svg class="ops-dropdown-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                        <div class="ops-dropdown-menu" id="ops-more-menu" role="menu">
+                            <button class="ops-dropdown-item" onclick="exportCSV(); closeOpsDropdowns()" type="button">
+                                <svg width="12" height="12"><use href="#icon-download"/></svg>Export CSV
+                            </button>
+                            <!-- Future entries (Diagnostics, Reports, Audit) plug in here. -->
+                        </div>
+                    </div>
                 </div>
                 <!-- Zone break: actions act on rows, filters narrow what's shown. -->
                 <div class="ops-sep ops-sep--zone"></div>
@@ -535,15 +563,9 @@
                             title="Filter by release validation state">
                         <option value="">All Release Status</option>
                     </select>
-                    <button class="ops-btn ops-btn-ghost ops-btn-clear-filters" id="btn-clear-filters"
-                            onclick="clearAllFilters()" type="button"
-                            title="Clear filters and selection"
-                            aria-label="Clear filters and selection"
-                            disabled>
-                        <svg width="13" height="13"><use href="#icon-x"/></svg>
-                        <span class="ops-btn-clear-label ops-btn-label">Clear</span>
-                        <span class="ops-clear-filter-count" id="clear-filter-count" hidden>0</span>
-                    </button>
+                    <!-- Clear button moved out of the toolbar — now an inline link
+                         inside the count strip (#scope-indicator), only visible when
+                         filters are active. Same handler. -->
                 </div>
                 <!-- Log Analysis filter + job search. Wraps to its own row below 1500px. -->
                 <div class="ops-group ops-group--filters-search" data-fv-disable>
@@ -571,41 +593,64 @@
                                title="Search jobs by name. Plain text matches as substring (case-insensitive). Use * to match any characters and ? to match a single character — e.g. *-api-* matches any name containing -api-, prp1-?? matches prp1-01, prp1-02, etc."
                                oninput="debouncedApplyFilters()" />
                     </div>
+                    <!-- Clear-all sits beside Search jobs. Shown only when a
+                         filter is active or a row is selected; toggled by updateScopeIndicator(). -->
+                    <button type="button"
+                            id="toolbar-clear-filters"
+                            class="ops-btn ops-btn-clear"
+                            onclick="clearAllFilters()"
+                            title="Clear all filters and selection"
+                            aria-label="Clear all filters and selection"
+                            hidden>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        <span class="ops-btn-label">Clear all</span>
+                    </button>
                 </div>
             </div>
 
-            <!-- Promotion / Release Validation row — sets the cut-off datetime. -->
-            <div class="ops-toolbar-row ops-promo-row" data-fv-disable>
-                <div class="promo-panel-left">
-                    <div class="promo-header">
+            <details id="promo-panel" class="promo-panel" open>
+                <summary class="promo-panel-summary">
+                    <span class="promo-panel-summary-left">
+                        <svg class="promo-panel-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                         <svg class="promo-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                        <span class="promo-label">Release Validation</span>
+                        <span class="promo-label">Release validation</span>
+                    </span>
+                    <!-- Chips live in the always-visible summary so counts
+                         stay glanceable even when the panel is collapsed. -->
+                    <span id="promo-summary-strip" class="promo-summary-strip hidden">
+                        <span class="promo-summary-chip promo-chip-passed"><span class="promo-chip-dot promo-dot-passed"></span><span id="promo-count-passed">0</span> Validated</span>
+                        <span class="promo-summary-chip promo-chip-failed"><span class="promo-chip-dot promo-dot-failed"></span><span id="promo-count-failed">0</span> Needs Rerun</span>
+                        <span class="promo-summary-chip promo-chip-inprog" id="promo-chip-inprog" style="display:none"><span class="promo-chip-dot promo-dot-inprog"></span><span id="promo-count-inprog">0</span> Running</span>
+                        <span class="promo-summary-chip promo-chip-notrun"><span class="promo-chip-dot promo-dot-notrun"></span><span id="promo-count-notrun">0</span> Not Run</span>
+                    </span>
+                </summary>
+
+                <div class="ops-toolbar-row ops-promo-row" data-fv-disable>
+                    <div class="promo-panel-left">
+                        <input type="datetime-local" id="promotion-datetime" class="promo-datetime-input" title="Select promotion date-time to evaluate regression status" step="60" />
+                        <button id="promo-apply-btn" class="promo-apply-btn hidden" onclick="confirmPromoApply()" title="Apply this date-time and recalculate release validation">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            Apply
+                        </button>
+                        <div class="promo-quick-btns">
+                            <button class="promo-quick-btn" onclick="setPromoQuick(0)" title="Set promotion time to right now">Now</button>
+                            <button class="promo-quick-btn" onclick="setPromoQuick(15)" title="Set promotion time to 15 minutes ago">−15m</button>
+                            <button class="promo-quick-btn" onclick="setPromoQuick(30)" title="Set promotion time to 30 minutes ago">−30m</button>
+                            <button class="promo-quick-btn" onclick="setPromoQuick(60)" title="Set promotion time to 1 hour ago">−1h</button>
+                            <button class="promo-quick-btn" onclick="setPromoQuick(120)" title="Set promotion time to 2 hours ago">−2h</button>
+                        </div>
+                        <button id="promotion-clear-btn" class="promo-clear-btn hidden" onclick="clearPromotionTime()" title="Clear promotion time">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                            Clear
+                        </button>
                     </div>
-                    <input type="datetime-local" id="promotion-datetime" class="promo-datetime-input" title="Select promotion date-time to evaluate regression status" step="60" />
-                    <button id="promo-apply-btn" class="promo-apply-btn hidden" onclick="confirmPromoApply()" title="Apply this date-time and recalculate release validation">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                        Apply
-                    </button>
-                    <div class="promo-quick-btns">
-                        <button class="promo-quick-btn" onclick="setPromoQuick(0)" title="Set promotion time to right now">Now</button>
-                        <button class="promo-quick-btn" onclick="setPromoQuick(15)" title="Set promotion time to 15 minutes ago">−15m</button>
-                        <button class="promo-quick-btn" onclick="setPromoQuick(30)" title="Set promotion time to 30 minutes ago">−30m</button>
-                        <button class="promo-quick-btn" onclick="setPromoQuick(60)" title="Set promotion time to 1 hour ago">−1h</button>
-                        <button class="promo-quick-btn" onclick="setPromoQuick(120)" title="Set promotion time to 2 hours ago">−2h</button>
-                    </div>
-                    <button id="promotion-clear-btn" class="promo-clear-btn hidden" onclick="clearPromotionTime()" title="Clear promotion time">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                        Clear
-                    </button>
-                </div>
-                <!-- Inline chip counts for the four release buckets. -->
-                <div id="promo-summary-strip" class="promo-summary-strip hidden">
-                    <div class="promo-summary-sep"></div>
-                    <div class="promo-summary-chip promo-chip-passed"><span class="promo-chip-dot promo-dot-passed"></span><span id="promo-count-passed">0</span> Validated</div>
-                    <div class="promo-summary-chip promo-chip-failed"><span class="promo-chip-dot promo-dot-failed"></span><span id="promo-count-failed">0</span> Needs Rerun</div>
-                    <div class="promo-summary-chip promo-chip-inprog" id="promo-chip-inprog" style="display:none"><span class="promo-chip-dot promo-dot-inprog"></span><span id="promo-count-inprog">0</span> Running</div>
-                    <div class="promo-summary-chip promo-chip-notrun"><span class="promo-chip-dot promo-dot-notrun"></span><span id="promo-count-notrun">0</span> Not Run</div>
-                </div>
+                   
+                    <span id="promo-summary-strip-body" class="promo-summary-strip promo-summary-strip--body hidden">
+                        <span class="promo-summary-chip promo-chip-passed"><span class="promo-chip-dot promo-dot-passed"></span><span id="promo-count-passed-body">0</span> Validated</span>
+                        <span class="promo-summary-chip promo-chip-failed"><span class="promo-chip-dot promo-dot-failed"></span><span id="promo-count-failed-body">0</span> Needs Rerun</span>
+                        <span class="promo-summary-chip promo-chip-inprog" id="promo-chip-inprog-body" style="display:none"><span class="promo-chip-dot promo-dot-inprog"></span><span id="promo-count-inprog-body">0</span> Running</span>
+                        <span class="promo-summary-chip promo-chip-notrun"><span class="promo-chip-dot promo-dot-notrun"></span><span id="promo-count-notrun-body">0</span> Not Run</span>
+                    </span>
                 <div class="promo-spacer"></div>
                 <!-- Right-aligned release actions (copy summary, rerun, etc.). -->
                 <div id="promo-action-row" class="promo-action-group hidden">
@@ -634,8 +679,11 @@
                         Rerun Regression Jobs
                     </button>
                 </div>
-            </div>
+                </div>
+            </details>
         </div>
+
+        <div id="scope-indicator" class="scope-indicator hidden" aria-live="polite"></div>
 
         <!-- Main job-results table. -->
         <div class="table-container">
@@ -725,6 +773,61 @@
                 </div>
             </div>
         </div>
+        <details id="rule-test-panel" class="rule-test-panel">
+            <summary class="rule-test-summary">
+                <span class="rule-test-summary-text">Test a classification rule</span>
+                <span class="rule-test-summary-hint">Paste a console log, optionally splice in a candidate rule, see what would match.</span>
+            </summary>
+            <div class="rule-test-grid">
+                <div class="rule-test-col">
+                    <label class="rule-test-label" for="rt-log">Console log</label>
+                    <textarea id="rt-log" class="rule-test-textarea" rows="10"
+                        placeholder="Paste a Jenkins console log fragment here..."
+                        spellcheck="false"></textarea>
+                </div>
+                <div class="rule-test-col">
+                    <label class="rule-test-label" for="rt-yaml">
+                        Candidate rule YAML <span class="rule-test-label-opt">(optional)</span>
+                    </label>
+                    <textarea id="rt-yaml" class="rule-test-textarea" rows="10"
+                        placeholder="rules:&#10;  - name: my_candidate&#10;    priority: 5&#10;    domain: ...&#10;    patterns:&#10;      - ..."
+                        spellcheck="false"></textarea>
+                </div>
+            </div>
+            <div class="rule-test-actions">
+                <button type="button" id="rt-run" class="rule-test-btn">Classify</button>
+                <button type="button" id="rt-copy" class="rule-test-btn rule-test-btn--secondary"
+                        title="Copy the classification result to the clipboard" disabled>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                         style="vertical-align:-2px;margin-right:6px">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>Copy
+                </button>
+                <button type="button" id="rt-clear" class="rule-test-btn rule-test-btn--secondary"
+                        title="Clear the log, candidate rule, and result so you can start a new test">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                         style="vertical-align:-2px;margin-right:6px">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                        <path d="M10 11v6M14 11v6"></path>
+                    </svg>Clear
+                </button>
+                <button type="button" id="rt-close" class="rule-test-btn rule-test-btn--secondary"
+                        title="Close this panel">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                         style="vertical-align:-2px;margin-right:6px">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>Close
+                </button>
+                <span id="rt-status" class="rule-test-status"></span>
+            </div>
+            <pre id="rt-result" class="rule-test-result" aria-live="polite"></pre>
+        </details>
     </main>
 
     <!-- Developer diagnostics drawer (console + network captures). -->
@@ -847,32 +950,51 @@
     <script defer src="{{ url_for('static', filename='js/auto-refresh.js', v=asset_v) }}"></script>
     <script defer src="{{ url_for('static', filename='js/selection-enhancements.js', v=asset_v) }}"></script>
     <script defer src="{{ url_for('static', filename='js/saved-views.js', v=asset_v) }}"></script>
+    <script defer src="{{ url_for('static', filename='js/rule-test.js', v=asset_v) }}"></script>
     <script defer src="{{ url_for('static', filename='js/app.js', v=asset_v) }}"></script>
+
+    <!-- Server-rendered boot data. Lives in JSON script tags so the bootstrap
+         block below stays plain JavaScript (no Jinja inside JS context). -->
+    <script type="application/json" id="race-boot-auto-refresh">{{ auto_refresh_interval_ms|default(30000)|tojson }}</script>
+    <script type="application/json" id="race-boot-taxonomy">{{ analysis_taxonomy|default({}, true)|tojson }}</script>
+    <script type="application/json" id="race-boot-contexts">{{ contexts|default({}, true)|tojson }}</script>
+
     <script>
-    /* Bootstrap: inject server-rendered Jinja data into client state, then init. */
+    /* Bootstrap: read server-rendered JSON boot data, push it into client state, then init. */
     document.addEventListener('DOMContentLoaded', function() {
+        function readBootJson(id, fallback) {
+            try {
+                var el = document.getElementById(id);
+                return el ? JSON.parse(el.textContent || 'null') : fallback;
+            } catch (e) { return fallback; }
+        }
+
+        try {
+            var arIntervalMs = parseInt(readBootJson('race-boot-auto-refresh', 30000), 10);
+            if (typeof setAutoRefreshInterval === 'function' && !isNaN(arIntervalMs)) {
+                setAutoRefreshInterval(arIntervalMs);
+            }
+        } catch (e) { /* default 30 s applies */ }
+
         // Analysis taxonomy (labels, colours) from the server.
-        var taxonomyJson = '{{ analysis_taxonomy|default("{}",true)|safe }}';
-        if (taxonomyJson && taxonomyJson !== '{}') {
-            try { applyAnalysisTaxonomy(JSON.parse(taxonomyJson)); }
+        var taxonomy = readBootJson('race-boot-taxonomy', {});
+        if (taxonomy && Object.keys(taxonomy).length > 0) {
+            try { applyAnalysisTaxonomy(taxonomy); }
             catch (e) {
-                console.warn('Failed to parse analysis taxonomy:', e);
-                diagLog('warning', 'Init', 'Failed to parse analysis taxonomy', { stack: e.stack, raw: e.message });
+                console.warn('Failed to apply analysis taxonomy:', e);
+                diagLog('warning', 'Init', 'Failed to apply analysis taxonomy', { stack: e.stack, raw: e.message });
             }
         }
 
         // Jenkins instances + predefined job lists from config/contexts.json.
-        var contextsJson = '{{ contexts|safe }}';
-        if (contextsJson && contextsJson !== 'null' && contextsJson !== '{}' && contextsJson !== '') {
+        var contexts = readBootJson('race-boot-contexts', {});
+        if (contexts && contexts.instances && Array.isArray(contexts.instances) && contexts.instances.length > 0) {
             try {
-                var parsed = JSON.parse(contextsJson);
-                if (parsed.instances && Array.isArray(parsed.instances) && parsed.instances.length > 0) {
-                    appState.contextsData = parsed;
-                    initializeContexts();
-                }
+                appState.contextsData = contexts;
+                initializeContexts();
             } catch (e) {
-                console.error('Failed to parse contexts:', e);
-                diagLog('error', 'Init', 'Failed to parse contexts JSON', { stack: e.stack, raw: e.message });
+                console.error('Failed to initialise contexts:', e);
+                diagLog('error', 'Init', 'Failed to initialise contexts', { stack: e.stack, raw: e.message });
             }
         }
 

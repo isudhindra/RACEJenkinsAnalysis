@@ -16,6 +16,19 @@ rules:
     action: "Explicit wait expired. Page or element took longer than expected — check app performance and wait duration."
     scope: "global"
 
+  - name: "awaitility_condition_timeout"
+    priority: 19
+    domain: "Timeout"
+    subcategory: "Awaitility Condition Timeout"
+    impact: "Product Regression Likely"
+    label: "Awaitility Timeout"
+    patterns:
+      - "org\\.awaitility\\.core\\.ConditionTimeoutException"
+      - "Lambda expression .* expected the predicate to return"
+      - "expected not null but was <null> within \\d+ seconds"
+    action: "An Awaitility wait expired before the backend returned the expected response. Check the downstream service (ARD / test harness) for slowness or a regression in the response shape."
+    scope: "global"
+
   - name: "page_load_timeout"
     priority: 20
     domain: "Timeout"

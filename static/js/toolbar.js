@@ -2,17 +2,26 @@
 'use strict';
 
 // == RERUN OPERATIONS ==
+function _scopedJobsForRerun() {
+    const scope = (typeof getActionScope === 'function') ? getActionScope() : null;
+    if (!scope) return Array.from(appState.jobs.values());
+    return scope.jobIds.map(id => appState.jobs.get(id)).filter(Boolean);
+}
 
 async function triggerRerunAllFailed() {
-    const failed = getVisibleJobs()
+    // "Rerun Failed" respects the action scope
+    const source = _scopedJobsForRerun();
+    const failed = source
         .filter(job => job.latest_status === 'FAILURE')
         .map(job => job.job_id);
 
     if (failed.length === 0) {
-        showToast('No failed jobs to rerun', 'info');
+        showToast('No failed jobs in current scope to rerun', 'info');
         return;
     }
-
+    const scope = (typeof getActionScope === 'function') ? getActionScope() : { label: 'all' };
+    const suffix = scope.label !== 'all' ? ` (${scope.label})` : '';
+    showToast(`Rerunning ${failed.length} failed job${failed.length === 1 ? '' : 's'}${suffix}…`, 'info');
     triggerRerun(failed);
 }
 
@@ -21,18 +30,27 @@ function triggerRerunSelected() {
         showToast('No jobs selected', 'info');
         return;
     }
-
+    const n = appState.selectedJobs.size;
+    showToast(`Rerunning ${n} selected job${n === 1 ? '' : 's'}…`, 'info');
     triggerRerun(Array.from(appState.selectedJobs));
 }
 
 function triggerRerunByStatus(status) {
-    const matching = getVisibleJobs()
+    // Same scope rule — narrows by filter/selection first, then by status.
+    const source = _scopedJobsForRerun();
+    const matching = source
         .filter(job => job.latest_status === status)
         .map(job => job.job_id);
     if (matching.length === 0) {
-        showToast('No ' + status.toLowerCase() + ' jobs to rerun', 'info');
+        showToast('No ' + status.toLowerCase() + ' jobs in current scope to rerun', 'info');
         return;
     }
+    const scope = (typeof getActionScope === 'function') ? getActionScope() : { label: 'all' };
+    const suffix = scope.label !== 'all' ? ` (${scope.label})` : '';
+    showToast(
+        `Rerunning ${matching.length} ${status.toLowerCase()} job${matching.length === 1 ? '' : 's'}${suffix}…`,
+        'info',
+    );
     triggerRerun(matching);
 }
 
@@ -74,17 +92,21 @@ function updateToolbarActions() {
     const sepRerun = document.getElementById('ops-sep-rerun');
     if (sepRerun) sepRerun.style.display = anyRerun ? '' : 'none';
 
-    // Failures button stays in a permanent slot — .is-empty dims it when
-    // count is zero so the position users remember stays consistent.
-    // Still clickable while failure view is open so they can exit it
-    // even if a refresh dropped the count to zero.
+    // Failures button stays in a permanent slot 
     const failBtn = document.getElementById('ops-failure-view');
     if (failBtn) {
-        const failCount = visibleJobs.filter(j => j.latest_status === 'FAILURE' || j.latest_status === 'UNSTABLE').length;
+        const inFailureView = (typeof _failureViewActive !== 'undefined') && _failureViewActive;
+        
+        let failCount;
+        if (inFailureView && window.appState && appState.jobs) {
+            failCount = Array.from(appState.jobs.values())
+                .filter(j => j.latest_status === 'FAILURE' || j.latest_status === 'UNSTABLE').length;
+        } else {
+            failCount = visibleJobs.filter(j => j.latest_status === 'FAILURE' || j.latest_status === 'UNSTABLE').length;
+        }
         const fcBadge = document.getElementById('ops-failure-count');
         if (fcBadge) fcBadge.textContent = failCount;
         const isEmpty = failCount === 0;
-        const inFailureView = (typeof _failureViewActive !== 'undefined') && _failureViewActive;
         failBtn.classList.toggle('is-empty', isEmpty && !inFailureView);
         failBtn.disabled = isEmpty && !inFailureView;
         failBtn.setAttribute('aria-disabled', (isEmpty && !inFailureView) ? 'true' : 'false');
@@ -497,7 +519,7 @@ async function triggerRerun(jobIds) {
     });
 
     try {
-        const response = await fetch('/api/rerun', {
+        const response = await apiFetch('/api/rerun', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -570,10 +592,17 @@ function exportCSV() {
         return;
     }
     try {
-    const visibleJobs = getVisibleJobs();
+    // Honour the action-scope rule
+    const scope = (typeof getActionScope === 'function') ? getActionScope() : null;
+    const visibleJobs = scope
+        ? scope.jobIds.map(id => appState.jobs.get(id)).filter(Boolean)
+        : getVisibleJobs();
     if (visibleJobs.length === 0) {
-        showToast('No jobs to export', 'info');
+        showToast('No jobs in current scope to export', 'info');
         return;
+    }
+    if (scope && scope.label !== 'all') {
+        showToast(`Exporting ${describeScope(scope)}…`, 'info');
     }
 
     const pt = getPromotionTime();
