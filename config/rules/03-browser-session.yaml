@@ -1,0 +1,43 @@
+# Browser session failures — the browser couldn't start, crashed, or
+# got disconnected mid-test. Almost always an infrastructure problem
+# (grid, node, container), not a product bug.
+
+rules:
+  - name: "webdriver_session_not_created"
+    priority: 50
+    domain: "Browser / Session"
+    subcategory: "Session Not Created"
+    impact: "Infrastructure Likely"
+    label: "Session Not Created"
+    patterns:
+      - "SessionNotCreatedException"
+      - "session not created"
+      - "unable to create (a |)session"
+    action: "WebDriver couldn't start. Check browser/driver version mismatch and Selenium Grid availability."
+    scope: "global"
+
+  - name: "webdriver_chrome_crash"
+    priority: 52
+    domain: "Browser / Session"
+    subcategory: "Browser Crash"
+    impact: "Infrastructure Likely"
+    label: "Browser Crashed"
+    patterns:
+      - "(chrome|chromium) (crashed|not reachable)"
+      - "DevToolsActivePort file doesn't exist"
+      - "tab crashed"
+    action: "Browser process died. Often resource starvation on the grid — retry or check node health."
+    scope: "global"
+
+  - name: "webdriver_disconnected"
+    priority: 54
+    domain: "Browser / Session"
+    subcategory: "Driver Disconnected"
+    impact: "Infrastructure Likely"
+    label: "Driver Disconnected"
+    patterns:
+      - "WebDriverException.*disconnected"
+      - "Connection reset.*\\b(chromedriver|geckodriver|edgedriver)"
+      - "no such window"
+    action: "Driver lost connection mid-test. Likely grid/node instability — retry once."
+    scope: "global"

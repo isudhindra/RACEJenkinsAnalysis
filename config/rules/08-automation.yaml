@@ -1,0 +1,73 @@
+# Test framework problems — missing step definitions, undefined steps,
+# and generic last-resort catch-alls for failures no other rule matched.
+# The catch-alls run last so specific matches always take priority.
+
+rules:
+  - name: "cucumber_pending"
+    priority: 30
+    domain: "Automation / Framework"
+    subcategory: "Pending Step"
+    impact: "Test Issue"
+    label: "Pending Step"
+    patterns:
+      - "io\\.cucumber\\.java\\.PendingException"
+      - "TODO: implement me"
+    action: "Step is marked pending — implementation missing. Implement the step definition."
+    scope: "global"
+
+  - name: "cucumber_undefined_step"
+    priority: 32
+    domain: "Automation / Framework"
+    subcategory: "Undefined Step"
+    impact: "Test Issue"
+    label: "Undefined Step"
+    patterns:
+      - "You can implement missing steps with the snippets below"
+      - "Undefined step:"
+    action: "Cucumber couldn't find a matching step definition. Add the @Given/@When/@Then or fix the feature wording."
+    scope: "global"
+
+  - name: "cucumber_ambiguous_step"
+    priority: 34
+    domain: "Automation / Framework"
+    subcategory: "Ambiguous Step"
+    impact: "Test Issue"
+    label: "Ambiguous Step"
+    patterns:
+      - "io\\.cucumber\\.core\\.runner\\.AmbiguousStepDefinitionsException"
+      - "Two step definitions match"
+    action: "Multiple step definitions match the same Gherkin step. Tighten one of the regex/expressions."
+    scope: "global"
+
+  - name: "generic_npe"
+    priority: 800
+    domain: "Automation / Framework"
+    subcategory: "Null Reference"
+    impact: "Test Issue"
+    label: "NullPointerException"
+    patterns:
+      - "java\\.lang\\.NullPointerException"
+      - "Cannot invoke .* because .* is null"
+      - "Cannot invoke method on null object"           # Groovy / Spock
+      - "Cannot read property '[^']+' of (?:null|undefined)"   # JS frontends
+    # Pull out the first non-framework stack frame's File.java:NNN so the
+    # dashboard surfaces the actual offending line as evidence_detail.
+    # The negative lookahead skips JVM internals and common test frameworks
+    # (Thucydides/Serenity, Cucumber, JUnit, ByteBuddy, Selenium) so the
+    # extracted location is almost always project code. Frames without a
+    # "File.java:NNN" (e.g. "Unknown Source") are naturally skipped.
+    extract_pattern: "at\\s+(?!(?:java|jdk|sun|net\\.thucydides|net\\.serenitybdd|io\\.cucumber|org\\.junit|org\\.openqa\\.selenium|net\\.bytebuddy)\\b)[\\w.$/]+\\((?P<source>[\\w$]+\\.java:\\d+)\\)"
+    action: "Null reference in a step or page object. evidence_detail names the file:line — start there."
+    scope: "global"
+
+  - name: "generic_exception"
+    priority: 900
+    domain: "Automation / Framework"
+    subcategory: "Unhandled Exception"
+    impact: "Inconclusive"
+    label: "Unhandled Exception"
+    patterns:
+      - "Exception"
+      - "Error"
+    action: "No specific signature matched. Open the console log and review the stack trace manually."
+    scope: "global"

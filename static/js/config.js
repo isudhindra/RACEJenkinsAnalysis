@@ -1,9 +1,7 @@
-// Jenkins Dashboard configuration module
-// Handles Jenkins authentication, view/job list discovery, credentials validation, and step-by-step wizard UI state
-
+// config.js — Auth wizard: Jenkins authentication, view/job-list discovery, and step state.
 'use strict';
 
-// Shared visibility helper
+// Show "(Ns)" after `thresholdMs` so the user sees the wait isn't frozen.
 function _runElapsedTimer(el, baseText, options) {
     if (!el) return { stop: function () {} };
     options = options || {};
@@ -21,13 +19,12 @@ function _runElapsedTimer(el, baseText, options) {
     };
 }
 
-// Show or hide the configuration panel with a toggle animation
 function toggleConfigPanel() {
     const panel = document.getElementById('config-panel');
     panel.classList.toggle('expanded');
 }
 
-// Update UI and app state when user switches Jenkins instances in the dropdown
+// User picked a different Jenkins instance: refresh dependent UI + state.
 function onInstanceChange() {
     const select = document.getElementById('cfg-jenkins-url');
     const customGroup = document.getElementById('custom-url-group');
@@ -39,28 +36,27 @@ function onInstanceChange() {
         appState.selectedInstance = null;
     } else {
         customGroup.classList.remove('cfg-custom-url-visible');
-        // Clear custom field state when switching away
         customInput.value = '';
         customInput.classList.remove('cfg-input-valid', 'cfg-input-invalid');
         document.getElementById('cfg-custom-url-valid').classList.remove('visible');
         hideError('cfg-url-error');
-        // Cache instance metadata
         if (appState.contextsData && appState.contextsData.instances) {
             appState.selectedInstance = appState.contextsData.instances.find(i => i.jenkins_url === select.value) || null;
-            // Pre-fill username if available
             if (appState.selectedInstance && appState.selectedInstance.default_username) {
                 document.getElementById('cfg-username').value = appState.selectedInstance.default_username;
             }
         }
     }
 
-    // Reset downstream steps if instance changes
     resetViewStep();
     updateConfigChips();
     updateFetchButton();
+    // Predefined job lists come from contexts.json (no Jenkins round-trip),
+    // so we can populate them before auth and refresh them on every instance switch.
+    populateJobListDropdown();
 }
 
-// Validate that a Jenkins URL is properly formatted (http/https with valid hostname)
+// http/https with a non-empty hostname.
 function isValidJenkinsUrl(url) {
     if (!url) return false;
     try {
@@ -71,7 +67,7 @@ function isValidJenkinsUrl(url) {
     }
 }
 
-// Set up real-time validation on custom Jenkins URL input with debouncing
+// Real-time (debounced) validation of the custom Jenkins URL input.
 (function initCustomUrlValidation() {
     document.addEventListener('DOMContentLoaded', function() {
         var input = document.getElementById('cfg-custom-url');
@@ -99,10 +95,8 @@ function isValidJenkinsUrl(url) {
             }, 250);
         });
 
-        // Strip whitespace on blur, re-validate
         input.addEventListener('blur', function() {
             var val = input.value.trim();
-            // Remove trailing slash for consistency
             if (val.endsWith('/')) val = val.replace(/\/+$/, '');
             input.value = val;
             if (val.length > 0 && !isValidJenkinsUrl(val)) {
@@ -112,7 +106,7 @@ function isValidJenkinsUrl(url) {
     });
 })();
 
-// Get the active Jenkins URL from either the preset dropdown or custom input field
+// Active Jenkins URL — preset dropdown value or custom input field.
 function getActiveJenkinsUrl() {
     const select = document.getElementById('cfg-jenkins-url');
     if (select.value === '__custom__') {
@@ -121,13 +115,12 @@ function getActiveJenkinsUrl() {
     return select.value;
 }
 
-// Validate credentials by sending them to the backend, then discover available views if valid
+// Validate manually-entered credentials with the backend, then move to view discovery.
 async function authenticateCredentials() {
     const jenkinsUrl = getActiveJenkinsUrl();
     const username = document.getElementById('cfg-username').value.trim();
     const token = document.getElementById('cfg-token').value.trim();
 
-    // Clear previous messages
     hideError('cfg-auth-error');
     hideError('cfg-auth-success');
 
@@ -158,7 +151,7 @@ async function authenticateCredentials() {
     const timer = _runElapsedTimer(statusEl, 'Connecting to Jenkins…');
 
     try {
-        const resp = await fetch('/api/validate', {
+        const resp = await apiFetch('/api/validate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jenkins_url: jenkinsUrl, username, api_token: token })
@@ -167,9 +160,7 @@ async function authenticateCredentials() {
         const data = await resp.json();
 
         if (data.valid) {
-            // Lock auth step
             lockAuthStep(jenkinsUrl, username, token);
-            // Move to view discovery
             await discoverViews(jenkinsUrl, username, token);
         } else {
             showError('cfg-auth-error', data.message || 'Authentication failed');
@@ -185,60 +176,62 @@ async function authenticateCredentials() {
     }
 }
 
-// Check if environment credentials are available and inject a one-click auth button if they are
+// If env credentials are present on the server (JENKINS_TEST_USERNAME / JENKINS_TEST_API_KEY),
+// inject a one-click auth button; otherwise the manual flow stays intact.
 async function checkEnvCredentials() {
+    // Reentrancy guard: if the section already exists (e.g. unlockAuth retry),
+    // there's nothing to inject — keep what's there.
+    if (document.getElementById('env-auth-section')) return;
+
+    let data;
     try {
-        const resp = await fetch('/api/env-credentials-check');
-        const data = await resp.json();
-        if (!data.available) return;
-
-        // Inject CSS if not already present
-        if (!document.getElementById('env-auth-styles')) {
-            const style = document.createElement('style');
-            style.id = 'env-auth-styles';
-            style.textContent =
-                '.env-auth-section{display:block;margin-top:12px;padding:10px 14px;background:#F0FDFA;border:1px solid #CCFBF1;border-radius:8px}' +
-                '.env-auth-label{font-size:11px;font-weight:600;color:#115E59;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;display:flex;align-items:center;gap:6px}' +
-                '.env-auth-label svg{flex-shrink:0}' +
-                '.env-auth-hint{font-size:11.5px;color:#5F7A76;margin-top:6px;line-height:1.4}' +
-                '.env-auth-hint code{font-size:10.5px;background:#E0F2FE;padding:1px 4px;border-radius:3px}' +
-                '.env-auth-divider{display:flex;align-items:center;gap:12px;margin:14px 0 2px;font-size:11px;font-weight:500;color:#94A3B8;text-transform:uppercase;letter-spacing:.06em}' +
-                '.env-auth-divider::before,.env-auth-divider::after{content:"";flex:1;height:1px;background:#E2E8F0}' +
-                '.cfg-btn-env{display:inline-flex;align-items:center;gap:6px;padding:7px 16px;font-size:12.5px;font-weight:600;border-radius:6px;cursor:pointer;transition:all .15s;border:1px solid #0F766E;background:linear-gradient(180deg,#0D9488,#0F766E);color:#fff;box-shadow:0 1px 2px rgba(15,118,110,.2),inset 0 1px 0 rgba(255,255,255,.15)}' +
-                '.cfg-btn-env:hover{background:linear-gradient(180deg,#0F766E,#115E59);border-color:#115E59;box-shadow:0 2px 6px rgba(15,118,110,.3),inset 0 1px 0 rgba(255,255,255,.1)}' +
-                '.cfg-btn-env:disabled{background:#99F6E4;border-color:#99F6E4;color:rgba(255,255,255,.7);cursor:not-allowed}';
-            document.head.appendChild(style);
+        const resp = await apiFetch('/api/env-credentials-check');
+        data = await resp.json();
+    } catch (err) {
+        if (typeof diagLog === 'function') {
+            diagLog('warning', 'Auth', '/api/env-credentials-check failed — env-auth button unavailable', { raw: err && err.message });
         }
-
-        // Build the env-auth section dynamically
-        const authActions = document.getElementById('auth-actions');
-        if (!authActions) return;
-
-        const section = document.createElement('div');
-        section.className = 'env-auth-section';
-        section.id = 'env-auth-section';
-        section.innerHTML =
-            '<div class="env-auth-label">' +
-                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0D9488" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h.01"/><path d="M10 12h.01"/><path d="M14 12h.01"/></svg>' +
-                'Environment Credentials Detected' +
-            '</div>' +
-            '<button class="cfg-btn cfg-btn-env" id="btn-env-authenticate" onclick="authenticateWithEnvCredentials()">' +
-                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>Authenticate using Environment Variables' +
-            '</button>' +
-            '<div class="env-auth-hint">Credentials sourced from <code>JENKINS_NP_USERNAME</code> and <code>JENKINS_NP_API_KEY1</code>. The API key is never displayed.</div>' +
-            '<div class="env-auth-divider">or authenticate manually</div>';
-
-        authActions.parentElement.insertBefore(section, authActions);
-    } catch (_) {
-        // Network error or env vars not available — no env-auth option
+        return;
     }
+    if (!data || !data.available) {
+        // Helps the user spot "vars set in shell but Python doesn't see them" — the most common silent failure.
+        if (typeof diagLog === 'function') {
+            const userVar = (data && data.username_var) || 'JENKINS_TEST_USERNAME';
+            const keyVar = (data && data.api_key_var) || 'JENKINS_TEST_API_KEY';
+            diagLog('info', 'Auth',
+                'Env-auth unavailable — server reports ' + userVar + ' and ' + keyVar +
+                ' not set. If they ARE set in your shell, the launch process didn\'t inherit them ' +
+                '(check `export` in your shell rc file, or set them in .env).');
+        }
+        return;
+    }
+
+    const authActions = document.getElementById('auth-actions');
+    if (!authActions) return;
+
+    const userVar = data.username_var || 'JENKINS_TEST_USERNAME';
+    const keyVar = data.api_key_var || 'JENKINS_TEST_API_KEY';
+    const section = document.createElement('div');
+    section.className = 'env-auth-section';
+    section.id = 'env-auth-section';
+    section.innerHTML =
+        '<div class="env-auth-label">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0D9488" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h.01"/><path d="M10 12h.01"/><path d="M14 12h.01"/></svg>' +
+            'Environment Credentials Detected' +
+        '</div>' +
+        '<button class="cfg-btn cfg-btn-env" id="btn-env-authenticate" onclick="authenticateWithEnvCredentials()">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>Authenticate using Environment Variables' +
+        '</button>' +
+        '<div class="env-auth-hint">Credentials sourced from <code>' + userVar + '</code> and <code>' + keyVar + '</code>. The API key is never displayed.</div>' +
+        '<div class="env-auth-divider">or authenticate manually</div>';
+
+    authActions.parentElement.insertBefore(section, authActions);
 }
 
-// Authenticate using server-side environment variables and lock the auth step on success
+// Authenticate using server-held env credentials; token never leaves the backend.
 async function authenticateWithEnvCredentials() {
     const jenkinsUrl = getActiveJenkinsUrl();
 
-    // Clear previous messages
     hideError('cfg-auth-error');
     hideError('cfg-auth-success');
 
@@ -255,7 +248,7 @@ async function authenticateWithEnvCredentials() {
     const timer = _runElapsedTimer(statusEl, 'Connecting to Jenkins…');
 
     try {
-        const resp = await fetch('/api/env-validate', {
+        const resp = await apiFetch('/api/env-validate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jenkins_url: jenkinsUrl })
@@ -264,14 +257,11 @@ async function authenticateWithEnvCredentials() {
         const data = await resp.json();
 
         if (data.valid) {
-            // Env-auth succeeded — lock the auth step
-            // Use the returned username; token is kept server-side
+            // Use the returned username; the token stays server-side (shown as bullets in the UI).
             const envUsername = data.username || 'env-user';
             lockAuthStep(jenkinsUrl, envUsername, '••••••••');
-            // Move to view discovery using env credentials via the same endpoint
             await discoverViews(jenkinsUrl, envUsername, '••••••••');
         } else {
-            // Env-auth failed — show error, keep manual auth available
             showError('cfg-auth-error', data.message || 'Environment authentication failed — use manual authentication below');
             btn.innerHTML = origHTML;
             btn.disabled = false;
@@ -285,7 +275,7 @@ async function authenticateWithEnvCredentials() {
     }
 }
 
-// Lock the auth step UI after credentials are validated, store them in app state
+// Mark the auth step complete and stash credentials in app state.
 function lockAuthStep(jenkinsUrl, username, token) {
     const step = document.getElementById('step-auth');
     step.classList.remove('step-active');
@@ -295,22 +285,19 @@ function lockAuthStep(jenkinsUrl, username, token) {
     hide('auth-actions');
     show('auth-lock-overlay');
 
-    // Hide the env-auth section when locked
     const envSection = document.getElementById('env-auth-section');
     if (envSection) envSection.style.display = 'none';
 
-    // Update header context
     const instName = appState.selectedInstance ? appState.selectedInstance.display_name : '';
     const envLabel = document.getElementById('header-env-label');
     if (envLabel && instName) envLabel.textContent = instName;
 
-    // Store in appState
     appState.authCredentials = { jenkins_url: jenkinsUrl, username, api_token: token };
 
     updateConfigChips();
 }
 
-// Unlock the auth step and restore the input fields for re-entry
+// Reopen the auth step for re-entry and reset env-auth UI.
 function unlockAuth(e) {
     if (e) e.stopPropagation();
     const step = document.getElementById('step-auth');
@@ -321,7 +308,6 @@ function unlockAuth(e) {
     show('auth-actions');
     hide('auth-lock-overlay');
 
-    // Restore env-auth section and reset its button
     const envSection = document.getElementById('env-auth-section');
     if (envSection) {
         envSection.style.display = 'block';
@@ -330,6 +316,9 @@ function unlockAuth(e) {
             envBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>Authenticate using Environment Variables';
             envBtn.disabled = false;
         }
+    } else {
+        // First-load probe may have failed (network blip or DOM not ready)
+        checkEnvCredentials();
     }
 
     const btn = document.getElementById('btn-authenticate');
@@ -345,7 +334,7 @@ function unlockAuth(e) {
     updateFetchButton();
 }
 
-// Fetch and populate the Jenkins views dropdown after successful authentication
+// Populate the Jenkins views dropdown after auth succeeds.
 async function discoverViews(jenkinsUrl, username, token) {
     const viewStep = document.getElementById('step-view');
     viewStep.classList.remove('step-locked');
@@ -355,16 +344,14 @@ async function discoverViews(jenkinsUrl, username, token) {
     viewSelect.innerHTML = '<option value="">Loading views from Jenkins…</option>';
     viewSelect.disabled = true;
 
-    // Elapsed-time visibility — if Jenkins is slow, the user sees "…(8s)"
-    // updating instead of a silent dropdown.
+    // Surface elapsed time so the user sees the wait isn't frozen.
     const loadingOption = viewSelect.options[0];
     const viewsTimer = _runElapsedTimer(loadingOption, 'Loading views from Jenkins…');
 
     const instanceId = appState.selectedInstance ? appState.selectedInstance.id : '';
 
     try {
-        // Always discover views dynamically from the authenticated Jenkins instance
-        const resp = await fetch('/api/discover-views', {
+        const resp = await apiFetch('/api/discover-views', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ jenkins_url: jenkinsUrl, username, api_token: token })
@@ -376,7 +363,7 @@ async function discoverViews(jenkinsUrl, username, token) {
 
         if (data.views && data.views.length > 0) {
             data.views.forEach(v => {
-                // Extract relative path from full URL
+                // Convert absolute view URL into a path relative to the instance base.
                 const basePath = jenkinsUrl.replace(/\/$/, '');
                 let viewPath = v.url;
                 if (v.url.startsWith(basePath)) {
@@ -402,11 +389,10 @@ async function discoverViews(jenkinsUrl, username, token) {
         reportFetchError('Views', 'Failed to discover Jenkins views', '/api/discover-views', err);
     }
 
-    // Also populate the job list dropdown from config
     populateJobListDropdown();
 }
 
-// Convert a Jenkins view path to its full URL using the instance base URL
+// Join a relative view path to the instance base URL.
 function resolveViewUrl(viewPath) {
     if (!viewPath) return { viewUrl: '', viewPath: '' };
     const jenkinsUrl = appState.authCredentials ? appState.authCredentials.jenkins_url : '';
@@ -416,51 +402,80 @@ function resolveViewUrl(viewPath) {
     return { viewUrl: base + '/' + normalized + '/', viewPath: normalized };
 }
 
-// Populate the predefined job list dropdown from the selected instance's configuration
+// Populate the Custom Job List dropdown from two sources, deduped:
+//   1. Predefined lists tied to the selected instance (contexts.json).
+//   2. Every .json under config/job_lists/ (via /api/list-available-job-lists),
+//      skipping any already shown above.
+// The directory scan is fire-and-forget; if it fails the predefined section still shows.
 function populateJobListDropdown() {
     const select = document.getElementById('cfg-joblist-select');
+    if (!select) return;
     select.innerHTML = '<option value="">Select a job list...</option>';
     const instanceId = appState.selectedInstance ? appState.selectedInstance.id : '';
+    const predefinedPaths = new Set();
 
-    if (appState.selectedInstance && appState.selectedInstance.predefined_job_lists) {
+    // Group 1: predefined for this instance.
+    if (appState.selectedInstance && Array.isArray(appState.selectedInstance.predefined_job_lists) && appState.selectedInstance.predefined_job_lists.length > 0) {
+        const group = document.createElement('optgroup');
+        group.label = 'Predefined for this instance';
         appState.selectedInstance.predefined_job_lists.forEach(jl => {
             const opt = document.createElement('option');
             opt.value = jl.job_list_file;
             opt.textContent = jl.name;
-            opt.dataset.environment = jl.environment || '';
-            opt.dataset.listId = jl.id;
+            if (jl.environment) opt.dataset.environment = jl.environment;
+            if (jl.id)          opt.dataset.listId = jl.id;
             opt.dataset.instanceId = instanceId;
-            select.appendChild(opt);
+            group.appendChild(opt);
+            predefinedPaths.add(jl.job_list_file);
         });
+        select.appendChild(group);
     }
+
+    // Group 2: all on-disk lists. Fetched async so the dropdown opens without delay.
+    apiFetch('/api/list-available-job-lists')
+        .then(r => r.ok ? r.json() : { lists: [] })
+        .then(data => {
+            const lists = (data && data.lists) || [];
+            const customLists = lists.filter(l => !predefinedPaths.has(l.file));
+            if (customLists.length === 0) return;
+            const group = document.createElement('optgroup');
+            group.label = 'All custom lists';
+            customLists.forEach(l => {
+                const opt = document.createElement('option');
+                opt.value = l.file;
+                opt.textContent = `${l.name}  (${l.count} jobs)`;
+                opt.dataset.fromFilesystem = '1';
+                group.appendChild(opt);
+            });
+            select.appendChild(group);
+        })
+        .catch(err => {
+            if (typeof diagLog === 'function') {
+                diagLog('warning', 'Config', 'Failed to list available job lists: ' + (err && err.message));
+            }
+        });
 }
 
-// Switch between view and job list source modes, reset the other mode's selection
+// Switch between view-mode and job-list-mode tabs; reset whichever mode is being left.
 function switchSourceMode(mode) {
     appState.sourceMode = mode;
 
-    // Update tabs
     document.getElementById('tab-view').classList.toggle('active', mode === 'view');
     document.getElementById('tab-joblist').classList.toggle('active', mode === 'job_list');
 
-    // Show/hide panels
     $id('panel-view').classList.toggle('hidden', mode !== 'view');
     $id('panel-joblist').classList.toggle('hidden', mode !== 'job_list');
 
-    // Clear the other mode's selection
     if (mode === 'view') {
-        // Reset job list selection
         document.getElementById('cfg-joblist-select').value = '';
         hide('joblist-job-count');
         appState.customJobList = null;
     } else {
-        // Reset view selection
         document.getElementById('cfg-view-select').value = '';
         hide('view-job-count');
         appState._resolvedViewUrl = '';
     }
 
-    // Reset step state
     const viewStep = document.getElementById('step-view');
     viewStep.classList.remove('step-complete');
     viewStep.classList.add('step-active');
@@ -471,7 +486,7 @@ function switchSourceMode(mode) {
     updateConfigChips();
 }
 
-// Load a predefined job list from server and store it in app state
+// Load a predefined job list from the server and stash it in app state.
 async function onJobListChange() {
     const select = document.getElementById('cfg-joblist-select');
     const filePath = select.value;
@@ -488,7 +503,7 @@ async function onJobListChange() {
     }
 
     try {
-        const resp = await fetch('/api/load-job-list', {
+        const resp = await apiFetch('/api/load-job-list', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ job_list_file: filePath })
@@ -502,25 +517,31 @@ async function onJobListChange() {
             return;
         }
 
-        appState.customJobList = { jobs: data.jobs, name: data.name };
-        countEl.innerHTML = '<strong>' + data.count + ' jobs</strong> in ' + data.name;
+        // Prefer the dropdown's human label (from contexts.json) over the route's
+        // file-basename fallback — keeps the predefined list looking friendly.
+        const selectedOption = select.options[select.selectedIndex];
+        const humanName = (selectedOption && selectedOption.textContent) || data.name;
+
+        appState.customJobList = { jobs: data.jobs, name: humanName };
+        // humanName is Jenkins-supplied — escape it; coerce the count.
+        countEl.innerHTML = '<strong>' + Number(data.count) + ' jobs</strong> in ' + escapeHtml(humanName);
         countEl.style.display = 'block';
 
-        // Derive environment + restore that env's stored promotion time so
-        // the user gets their per-environment baseline back automatically.
-        const selectedOption = select.options[select.selectedIndex];
-        if (selectedOption.dataset.environment) {
-            appState._selectedEnvironment = selectedOption.dataset.environment;
+        // Restore the env's stored promotion time so the per-env baseline
+        // returns automatically. Falls back to the parent instance's env.
+        const instanceEnv = (appState.selectedInstance && appState.selectedInstance.environment) || '';
+        const env = (selectedOption && selectedOption.dataset.environment) || instanceEnv;
+        if (env) {
+            appState._selectedEnvironment = env;
             if (typeof loadPromotionTimeForCurrentEnv === 'function') {
                 loadPromotionTimeForCurrentEnv();
             }
         }
 
-        // Mark step complete
         const viewStep = document.getElementById('step-view');
         viewStep.classList.remove('step-active');
         viewStep.classList.add('step-complete');
-        document.getElementById('view-badge').textContent = data.name;
+        document.getElementById('view-badge').textContent = humanName;
         document.getElementById('view-badge').style.display = '';
 
     } catch (err) {
@@ -534,7 +555,7 @@ async function onJobListChange() {
     updateConfigChips();
 }
 
-// Parse a JSON job list file from user upload and validate the job entries
+// Parse a user-uploaded JSON job list and validate its entries.
 function onJobListUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -545,7 +566,7 @@ function onJobListUpload(event) {
             const data = JSON.parse(e.target.result);
             let jobs = data.jobs || [];
 
-            // Validate: jobs must be an array of non-empty strings
+            // Validate: jobs must be an array of non-empty strings; dedupe.
             if (!Array.isArray(jobs)) {
                 throw new Error('"jobs" field must be an array');
             }
@@ -553,7 +574,6 @@ function onJobListUpload(event) {
             if (jobs.length === 0) {
                 throw new Error('No valid job entries found in file');
             }
-            // Deduplicate
             jobs = [...new Set(jobs)];
 
             const name = data.name || file.name.replace('.json', '');
@@ -561,13 +581,11 @@ function onJobListUpload(event) {
             appState.customJobList = { jobs, name };
 
             const countEl = document.getElementById('joblist-job-count');
-            countEl.innerHTML = '<strong>' + jobs.length + ' jobs</strong> from uploaded file';
+            countEl.innerHTML = '<strong>' + Number(jobs.length) + ' jobs</strong> from uploaded file';
             countEl.style.display = 'block';
 
-            // Clear predefined dropdown
             document.getElementById('cfg-joblist-select').value = '';
 
-            // Mark step complete
             const viewStep = document.getElementById('step-view');
             viewStep.classList.remove('step-active');
             viewStep.classList.add('step-complete');
@@ -583,11 +601,11 @@ function onJobListUpload(event) {
         }
     };
     reader.readAsText(file);
-    // Reset input so same file can be re-uploaded
+    // Reset the input so the same file can be re-uploaded.
     event.target.value = '';
 }
 
-// Validate a selected Jenkins view and fetch the job count for display
+// Validate a selected Jenkins view and show its job count.
 async function onViewChange() {
     const select = document.getElementById('cfg-view-select');
     const selectedPath = select.value;
@@ -602,7 +620,6 @@ async function onViewChange() {
         return;
     }
 
-    // Resolve view_path → full view_url from instance base URL
     const resolved = resolveViewUrl(selectedPath);
     appState._resolvedViewUrl = resolved.viewUrl;
 
@@ -615,10 +632,8 @@ async function onViewChange() {
     updateConfigChips();
     updateFetchButton();
 
-    // Validate view and get job count — send both view_path and view_url
     if (appState.authCredentials) {
-        // Show the count element immediately with a "Counting…" placeholder
-        // so users see something happening while Jenkins is queried.
+        // Show a "Counting…" placeholder right away so the user sees activity.
         const countEl = document.getElementById('view-job-count');
         const viewName = select.options[select.selectedIndex].text;
         countEl.textContent = 'Counting jobs in ' + viewName + '…';
@@ -626,7 +641,7 @@ async function onViewChange() {
         const countTimer = _runElapsedTimer(countEl, 'Counting jobs in ' + viewName + '…');
 
         try {
-            const resp = await fetch('/api/discover-view-jobs-count', {
+            const resp = await apiFetch('/api/discover-view-jobs-count', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -645,17 +660,18 @@ async function onViewChange() {
                 return;
             }
 
-            countEl.innerHTML = '<strong>' + data.count + ' jobs</strong> in ' + (data.view_name || 'this view');
+            // view_name is Jenkins-supplied — escape it; coerce the count.
+            countEl.innerHTML = '<strong>' + Number(data.count) + ' jobs</strong> in ' + escapeHtml(data.view_name || 'this view');
         } catch (err) {
             countTimer.stop();
             countEl.style.display = 'none';
-            // Non-blocking — just skip count display
+            // Count display is non-blocking — silently skip on error.
         }
     }
 
 }
 
-// Reset the view selection step to locked state and clear all view-related selections
+// Reset the view-selection step back to locked and clear its inputs.
 function resetViewStep() {
     const step = document.getElementById('step-view');
     step.classList.remove('step-active', 'step-complete');
@@ -666,12 +682,11 @@ function resetViewStep() {
     hide('view-job-count');
     hideError('cfg-view-error');
 
-    // Reset job list state
     document.getElementById('cfg-joblist-select').innerHTML = '<option value="">Select a job list...</option>';
     hide('joblist-job-count');
     appState.customJobList = null;
 
-    // Reset source mode tabs to default (view)
+    // Default back to view mode on reset.
     appState.sourceMode = 'view';
     document.getElementById('tab-view').classList.add('active');
     document.getElementById('tab-joblist').classList.remove('active');
@@ -679,7 +694,7 @@ function resetViewStep() {
     $id('panel-joblist').classList.add('hidden');
 }
 
-// Render summary chips showing current auth, source, and job list configuration
+// Render the auth/source summary chips shown above the toolbar.
 function updateConfigChips() {
     const chips = document.getElementById('config-chips');
     let html = '';
@@ -688,7 +703,8 @@ function updateConfigChips() {
         let displayHost;
         try { displayHost = new URL(appState.authCredentials.jenkins_url).hostname; }
         catch { displayHost = appState.authCredentials.jenkins_url; }
-        html += '<span class="config-chip chip-auth-ok"><span class="chip-dot"></span>' + appState.authCredentials.username + '@' + displayHost + '</span>';
+        // Username (user-supplied) and host (Jenkins-derived) both need escaping.
+        html += '<span class="config-chip chip-auth-ok"><span class="chip-dot"></span>' + escapeHtml(appState.authCredentials.username) + '@' + escapeHtml(displayHost) + '</span>';
     } else {
         html += '<span class="config-chip chip-auth-none"><span class="chip-dot"></span>Not authenticated</span>';
     }
@@ -696,17 +712,19 @@ function updateConfigChips() {
     if (appState.sourceMode === 'view') {
         const viewSelect = document.getElementById('cfg-view-select');
         if (viewSelect.value && viewSelect.value !== '') {
+            // viewName comes from Jenkins via <select> options.
             const viewName = viewSelect.options[viewSelect.selectedIndex].text;
-            html += '<span class="config-chip chip-view"><span class="chip-dot"></span>' + viewName + '</span>';
+            html += '<span class="config-chip chip-view"><span class="chip-dot"></span>' + escapeHtml(viewName) + '</span>';
         }
     } else if (appState.sourceMode === 'job_list' && appState.customJobList) {
-        html += '<span class="config-chip chip-view"><span class="chip-dot"></span>' + appState.customJobList.name + ' (' + appState.customJobList.jobs.length + ' jobs)</span>';
+        // customJobList.name comes from the uploaded JSON.
+        html += '<span class="config-chip chip-view"><span class="chip-dot"></span>' + escapeHtml(appState.customJobList.name) + ' (' + Number(appState.customJobList.jobs.length) + ' jobs)</span>';
     }
 
     chips.innerHTML = html;
 }
 
-// Check auth and source readiness, determine fetch button state
+// Compute readiness flags for the Fetch button (auth + source + same-source detection).
 function getFetchSourceState() {
     let sourceReady = false;
     let sourceName = '';
@@ -731,7 +749,7 @@ function getFetchSourceState() {
     return { sourceReady, sourceName, hasJobs, hasFailed, sameSource };
 }
 
-// Update fetch button text and state based on auth and source readiness
+// Flip the Fetch button between "Fetch Jobs" and "Full Refresh" based on state.
 function updateFetchButtonState(btn, btnRefresh, btnRefreshFailed, state) {
     if (appState.authCredentials && state.sourceReady) {
         if (state.hasJobs && state.sameSource) {
@@ -753,10 +771,10 @@ function updateFetchButtonState(btn, btnRefresh, btnRefreshFailed, state) {
     }
 }
 
-// Update the summary message below the fetch button based on current state
 function updateFetchSummary(summary, state) {
     if (appState.authCredentials && state.sourceReady) {
-        summary.innerHTML = 'Ready to fetch from <strong>' + state.sourceName + '</strong>';
+        // sourceName chains through Jenkins / user-uploaded job list.
+        summary.innerHTML = 'Ready to fetch from <strong>' + escapeHtml(state.sourceName) + '</strong>';
     } else if (appState.authCredentials) {
         summary.textContent = appState.sourceMode === 'view' ? 'Select a Jenkins view to continue' : 'Select a job list to continue';
     } else {
@@ -764,7 +782,6 @@ function updateFetchSummary(summary, state) {
     }
 }
 
-// Orchestrate fetch button updates: check state, update button text, update summary
 function updateFetchButton() {
     const btn = $id('btn-fetch');
     const btnRefresh = $id('btn-update');
@@ -775,18 +792,17 @@ function updateFetchButton() {
     updateFetchSummary(summary, state);
 }
 
-// Reset auth and view selections, clear form fields
+// Reset the auth wizard and clear its form fields.
 function resetConfigPanel() {
     unlockAuth();
     resetViewStep();
-    // Clear all form fields
     ['cfg-jenkins-url', 'cfg-username', 'cfg-token', 'cfg-environment'].forEach(id => {
         const el = $id(id);
         if (el) el.value = '';
     });
 }
 
-// Clear all session data: jobs, credentials, filters, state machines, and reset UI
+// User-confirmed full wipe: jobs, credentials, filters, sort, selections, timers, then reset UI.
 function clearSession() {
     if (!confirm('Clear all credentials and job data?')) return;
 
@@ -806,7 +822,13 @@ function clearSession() {
         searchText: ''
     };
 
-    // Abort any in-flight fetch (F3)
+    // Wipe persistent stores too
+    try {
+        localStorage.removeItem('race.saved_views');
+        localStorage.removeItem('auto_refresh_enabled');
+        sessionStorage.removeItem('promotion_times');
+    } catch (_) { /* private mode or storage disabled */ }
+
     if (appState._fetchAbortController) {
         appState._fetchAbortController.abort();
         appState._fetchAbortController = null;
@@ -814,7 +836,6 @@ function clearSession() {
     appState.activeOperationId = null;
     appState._fetchErrorCount = 0;
 
-    // Reset sort state (F2)
     currentSortKey = null;
     currentSortDir = null;
     document.querySelectorAll('th[data-sortable]').forEach(th => {
@@ -823,16 +844,13 @@ function clearSession() {
         if (icon) icon.textContent = '⇅';
     });
 
-    // Cancel pending RAF from SSE debouncing (F6)
     if (_filterSortRaf) {
         cancelAnimationFrame(_filterSortRaf);
         _filterSortRaf = null;
     }
 
-    // Clear stale-row detection interval
     if (staleCheckInterval) { clearInterval(staleCheckInterval); staleCheckInterval = null; }
 
-    // Clear promotion time input and downstream state
     const promoInput = document.getElementById('promotion-datetime');
     if (promoInput) promoInput.value = '';
 
@@ -846,7 +864,7 @@ function clearSession() {
     showToast('Session cleared', 'success');
 }
 
-// Switch between detail and summary view modes, update table classes and UI labels
+// Switch between Detail and Summary view modes; the button label always names the DESTINATION mode.
 function switchViewMode(mode) {
     appState.viewMode = mode;
     const table = document.getElementById('job-table');
@@ -855,22 +873,28 @@ function switchViewMode(mode) {
     if (mode === 'detail') {
         table.classList.add('mode-detail');
         rows.forEach(row => row.classList.add('detail-mode'));
-        document.getElementById('view-mode-label').textContent = 'Switch to Summary';
         showLogAnalysisFilter();
     } else {
         table.classList.remove('mode-detail');
         rows.forEach(row => row.classList.remove('detail-mode'));
-        document.getElementById('view-mode-label').textContent = 'Switch to Detail';
         hideLogAnalysisFilter();
+    }
+
+    const label = document.getElementById('view-mode-label');
+    if (label) label.textContent = (mode === 'detail') ? 'Summary' : 'Detail';
+    const btn = document.getElementById('btn-view-mode');
+    if (btn) {
+        btn.setAttribute('aria-label', mode === 'detail' ? 'Switch to summary view' : 'Switch to detail view');
+        btn.setAttribute('title', mode === 'detail' ? 'Switch to summary view' : 'Switch to detail view');
     }
 }
 
-// Return the current credentials or an empty credential object
+// Current credentials or an empty placeholder.
 function getCredentials() {
     return appState.authCredentials || { jenkins_url: '', username: '', api_token: '' };
 }
 
-// Check that credentials are complete, show toast if missing, return credentials or null
+// Return credentials, or null after toasting if any field is missing.
 function ensureCredentials(toastMsg) {
     var c = getCredentials();
     if (!c.jenkins_url || !c.username || !c.api_token) {

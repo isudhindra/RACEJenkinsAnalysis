@@ -1,18 +1,17 @@
+// motion.js — Storytelling animations for the fetch lifecycle (narrative strip + KPI reveal).
 'use strict';
 
-// ── Phase lifecycle 
 var _motion = {
     phase: 'idle',          // current storytelling phase
-    phaseStartTime: 0,      // when the current phase began (performance.now)
-    rowsRevealed: 0,        // how many rows have entered so far
+    phaseStartTime: 0,      // performance.now() when the phase began
+    rowsRevealed: 0,        // rows that have animated in
     kpiRevealed: false,     // whether KPI panels have been revealed
     completionRevealed: false,
 };
 
-// ── Phase transitions ──────────────────────────────────────────────────
+//  Phase transitions 
 
-// Move to a new storytelling phase — updates the narrative strip and triggers
-// CSS class changes that drive the visual transitions.
+// Advance to a new fetch phase — updates the narrative strip and triggers transitions.
 function motionSetPhase(phase) {
     if (_motion.phase === phase) return;
     console.log('[Motion] Phase:', _motion.phase, '→', phase);
@@ -22,7 +21,7 @@ function motionSetPhase(phase) {
     var strip = document.getElementById('motion-narrative');
     if (!strip) return;
 
-    // Show the strip when we leave idle, and hide KPI metrics until data arrives
+    // Leaving idle: reveal the strip and hide KPIs until data lands.
     if (phase !== 'idle') {
         strip.classList.add('motion-active');
         var kpiC = document.getElementById('kpi-container');
@@ -31,7 +30,6 @@ function motionSetPhase(phase) {
         }
     }
 
-    // Update all phase nodes
     var nodes = strip.querySelectorAll('.motion-phase-node');
     var phases = ['connecting', 'discovering', 'fetching', 'classifying', 'complete'];
     var currentIdx = phases.indexOf(phase);
@@ -48,20 +46,18 @@ function motionSetPhase(phase) {
         }
     }
 
-    // Update the connecting line fills
     var lines = strip.querySelectorAll('.motion-phase-line');
     for (var j = 0; j < lines.length; j++) {
         lines[j].classList.toggle('line-filled', j < currentIdx);
         lines[j].classList.toggle('line-active', j === currentIdx - 1 || (j === currentIdx && phase !== 'connecting'));
     }
 
-    // On completion, trigger the settle animation sequence
     if (phase === 'complete') {
         _scheduleCompletionSettle();
     }
 }
 
-// Reset motion state back to idle — called when fetch is cancelled or before a new fetch
+// Reset motion state — called on cancel or before a fresh fetch.
 function motionReset() {
     _motion.phase = 'idle';
     _motion.rowsRevealed = 0;
@@ -82,15 +78,13 @@ function motionReset() {
         }
     }
 
-    // Reset KPI panel motion classes
     var kpiContainer = document.getElementById('kpi-container');
     if (kpiContainer) {
         kpiContainer.classList.remove('kpi-waiting', 'kpi-revealed', 'kpi-settling');
     }
 }
 
-// Trigger the KPI panel reveal animation when the first meaningful data arrives.
-// Called from updateSummaryBar after jobs are loaded.
+// Reveal the KPI panel when the first meaningful data arrives (called from updateSummaryBar).
 function motionRevealKPI() {
     if (_motion.kpiRevealed) return;
     if (_motion.phase === 'idle') return;
@@ -102,15 +96,13 @@ function motionRevealKPI() {
     var kpiContainer = document.getElementById('kpi-container');
     if (!kpiContainer) return;
 
-    // Remove the waiting state and trigger the reveal
     kpiContainer.classList.remove('kpi-waiting');
     kpiContainer.classList.add('kpi-revealed');
 
-    // Stagger each metric block inside the panel
+    // Stagger each metric block inside the panel for a sequential reveal.
     var metrics = kpiContainer.querySelectorAll('.kpi-metric');
     for (var i = 0; i < metrics.length; i++) {
         metrics[i].style.setProperty('--stagger', i);
-        // Add count-up blur effect to value digits
         var val = metrics[i].querySelector('.kpi-metric-val');
         if (val) {
             val.style.setProperty('--stagger', i);
@@ -118,7 +110,6 @@ function motionRevealKPI() {
         }
     }
 
-    // Clean up count-up class after animations finish
     setTimeout(function() {
         var vals = kpiContainer.querySelectorAll('.kpi-metric-val.motion-counting');
         for (var k = 0; k < vals.length; k++) {
@@ -127,19 +118,15 @@ function motionRevealKPI() {
     }, 1200);
 }
 
-// ── Row entry enhancement ──────────────────────────────────────────────
+//  Row entry tracking ─
 
-// Track row reveal count for stagger calculations
 function motionNoteRowInserted() {
     _motion.rowsRevealed++;
 }
 
-// ── Completion settle ──────────────────────────────────────────────────
+//  Completion settle 
 
-// After fetch completes, run a short orchestrated "settle" sequence:
-// 1. Phase strip pulses and settles
-// 2. KPI panels get a subtle emphasis
-// 3. The strip minimizes after a delay
+// After fetch completes: pulse KPIs, then auto-minimise the narrative strip.
 function _scheduleCompletionSettle() {
     if (_motion.completionRevealed) return;
     console.log('[Motion] Completion settle — rows revealed:', _motion.rowsRevealed);
@@ -148,13 +135,11 @@ function _scheduleCompletionSettle() {
     var kpiContainer = document.getElementById('kpi-container');
     if (kpiContainer) {
         kpiContainer.classList.add('kpi-settling');
-        // Remove settling class after animation plays
         setTimeout(function() {
             if (kpiContainer) kpiContainer.classList.remove('kpi-settling');
         }, 900);
     }
 
-    // Auto-minimize the narrative strip after the user has seen completion
     setTimeout(function() {
         var strip = document.getElementById('motion-narrative');
         if (strip && _motion.phase === 'complete') {
@@ -163,10 +148,9 @@ function _scheduleCompletionSettle() {
     }, 4000);
 }
 
-// ── Enrichment pulse ───────────────────────────────────────────────────
+//Enrichment pulse
 
-// Flash a subtle blue pulse on a row when classification data arrives.
-// Enhances the existing row-just-enriched animation with a smoother feel.
+// Blue pulse on a row when its classification data arrives.
 function motionEnrichRow(row) {
     if (!row) return;
     console.log('[Motion] Row enriched:', row.dataset.jobId);

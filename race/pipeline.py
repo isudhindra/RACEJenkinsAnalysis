@@ -1,13 +1,26 @@
+"""The analysis brain of RACE. Loads classifier rules from YAML, fetches build
+metadata and console logs in parallel, and turns each Jenkins job into a
+labelled JobRecord the dashboard can render.
+"""
+
+from __future__ import annotations
 
 import logging
 import re
-from typing import Callable, Dict, List, Optional, Tuple
+import regex as _regex
+_USER_PATTERN_TIMEOUT = 2.0
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import Callable, Dict, List, Optional, Tuple
 
 import yaml
 
-# Module logger.
+# Single source of truth for concurrent-fetch defaults 
+DEFAULT_WORKERS = 24
+MIN_WORKERS = 1
+MAX_WORKERS = 64
+
 _log = logging.getLogger("jenkins.metrics")
 if not _log.handlers:
     _h = logging.StreamHandler()
@@ -16,77 +29,76 @@ if not _log.handlers:
     _log.setLevel(logging.INFO)
     _log.propagate = False
 
-from models import (
-    JobRecord,
-    BuildInfo,
+from race.jenkins_client import JenkinsClient, JenkinsClientError
+from race.lib.build_cache import ViewPrefetch
+from race.models import (
+    AnalysisLabel,
     BuildStatus,
+    ClassificationResult,
+    ConfidenceLevel,
+    DataCompleteness,
+    ErrorLogEntry,
+    FailureEvidence,
     HealthState,
-    TestMetrics,
-    ThreeRunContext,
+    JobRecord,
+    RuleDefinition,
+    SecondaryHint,
     SSEEvent,
     SSEEventType,
     StageCompletion,
-    DataCompleteness,
-    ConfidenceLevel,
-    FailureEvidence,
-    ErrorLogEntry,
-    ClassificationResult,
-    AnalysisLabel,
-    RuleDefinition,
-    SecondaryHint,
+    TestMetrics,
+    ThreeRunContext,
 )
-from jenkins_client import JenkinsClient, JenkinsClientError
 
 
-# ============================================================================
-# CLASSIFICATION ENGINE
-# ============================================================================
+# Log-normalisation regex table
+_NORMALIZATION_REGEXES: List[Tuple["re.Pattern", str]] = [
+    # ANSI escape sequences and colour codes.
+    (re.compile(r"\x1b\[[0-9;]*m|\x1b\(B"), ""),
+    # ISO 8601 timestamps.
+    (re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"), ""),
+    # Unix epoch timestamps (10 or 13 digits).
+    (re.compile(r"\b\d{10}\b|\b\d{13}\b"), ""),
+    # Thread identifiers — [tid:xxx], [thread:xxx], etc.
+    (re.compile(r"\[(?:tid|thread|t|thr)[:=]?[\w\-]+\]", re.IGNORECASE), ""),
+    # Log level markers.
+    (re.compile(r"\[(DEBUG|INFO|WARN|WARNING|ERROR|FATAL|CRITICAL|TRACE)\]", re.IGNORECASE), ""),
+    # Collapse horizontal whitespace but keep newlines.
+    (re.compile(r"[ \t]+"), " "),
+]
+
 
 class Classifier:
     """Deterministic rule-based classifier for Jenkins failure logs."""
 
     def __init__(self, rules_path: str = "rules.yaml") -> None:
-        """
-        Initialize the classifier.
-
-        Args:
-            rules_path: Path to the YAML file containing classification rules.
-
-        Raises:
-            FileNotFoundError: If rules file does not exist.
-            ValueError: If rules file is invalid or contains missing required fields.
+        """Load classifier rules from a YAML file or directory and pre-compile every pattern.
+        Directory mode merges all *.yaml files; underscore-prefixed files carry meta-only data.
         """
         self.rules: List[RuleDefinition] = []
         self.fallback_labels: Dict[str, str] = {}
         self.domain_colors: Dict[str, str] = {}
         self._compiled_patterns: dict = {}
+        # Compiled extract_pattern 
+        self._compiled_extractors: Dict[str, "re.Pattern"] = {}
 
-        self._load_rules_file(rules_path)
+        import os
+        if os.path.isdir(rules_path):
+            self._load_rules_dir(rules_path)
+        else:
+            self._load_rules_file(rules_path)
 
-        # Pre-compile regex patterns for each rule
         for rule in self.rules:
             self._compiled_patterns[rule.name] = [
-                re.compile(pattern) for pattern in rule.patterns
+                _regex.compile(pattern) for pattern in rule.patterns
             ]
+            if rule.extract_pattern:
+                self._compiled_extractors[rule.name] = _regex.compile(rule.extract_pattern)
 
     def classify(self, console_text: str) -> ClassificationResult:
+        """Classify a Jenkins failure log into a ClassificationResult.
+        Empty input and no-match cases yield an Unknown result with the appropriate fallback label.
         """
-        Classify a Jenkins failure using the deterministic pipeline.
-
-        Step 1: Normalize log
-        Step 2: Evaluate rules in priority order
-        Step 3: Assign primary classification (first match)
-        Step 4: Find secondary hint (first match with different domain)
-        Step 5: Determine confidence level
-
-        Args:
-            console_text: Raw console log output from Jenkins.
-
-        Returns:
-            ClassificationResult with all fields populated.
-            If no matches: confidence=UNKNOWN, domain="Unknown", action="Manual investigation needed".
-        """
-        # Handle empty/None input
         if not console_text or not console_text.strip():
             fallback_label = self.fallback_labels.get("no_console_log", "No Console Data")
             return ClassificationResult(
@@ -102,13 +114,9 @@ class Classifier:
                 all_labels=[AnalysisLabel(label=fallback_label, domain="Unknown", action="", rule_name="")],
             )
 
-        # Step 1: Normalize log
         normalized = self._normalize_log(console_text)
-
-        # Step 2: Evaluate rules
         matches = self._evaluate_rules(normalized)
 
-        # If no matches, return UNKNOWN
         if not matches:
             fallback_label = self.fallback_labels.get("no_pattern_match", "Unclassified Failure")
             return ClassificationResult(
@@ -124,10 +132,9 @@ class Classifier:
                 all_labels=[AnalysisLabel(label=fallback_label, domain="Unknown", action="", rule_name="")],
             )
 
-        # Step 3: Primary classification (first match by priority)
+        # Primary = highest-priority match; secondary = first match from a different domain.
         primary_rule, primary_pattern_str, primary_line_num = matches[0]
 
-        # Step 4: Secondary hint (first match with different domain)
         secondary_hint: Optional[SecondaryHint] = None
         if len(matches) > 1:
             for rule, pattern_str, line_num in matches[1:]:
@@ -139,34 +146,40 @@ class Classifier:
                     )
                     break
 
-        # Step 5: Determine confidence
         confidence = self._determine_confidence(
             primary_rule, matches, primary_pattern_str
         )
 
-        # Extract evidence snippet
         evidence = self._extract_evidence(normalized, primary_line_num, context_lines=5)
 
-        # Step 6: Build multi-label aggregation from ALL matched rules.
-        # Deduplicate by label text; exclude the generic catch-all rule
-        # ("generic_exception") if more specific rules matched.
+        # Aggregate labels
+        CATCHALL_PRIORITY = 500
+        has_specific = any(r.priority < CATCHALL_PRIORITY for r, _, _ in matches)
+
         all_labels: List[AnalysisLabel] = []
         seen_labels: set = set()
-        has_specific = any(r.name != "generic_exception" for r, _, _ in matches)
+        seen_domains: set = set()
 
         for rule, _, _ in matches:
-            # Skip generic catch-all when specific matches exist
-            if has_specific and rule.name == "generic_exception":
+            
+            if has_specific and rule.priority >= CATCHALL_PRIORITY:
+                continue
+            if rule.domain in seen_domains:
                 continue
             lbl = rule.label or rule.subcategory
-            if lbl not in seen_labels:
-                seen_labels.add(lbl)
-                all_labels.append(AnalysisLabel(
-                    label=lbl,
-                    domain=rule.domain,
-                    action=rule.action,
-                    rule_name=rule.name,
-                ))
+            if lbl in seen_labels:
+                continue
+            seen_labels.add(lbl)
+            seen_domains.add(rule.domain)
+            all_labels.append(AnalysisLabel(
+                label=lbl,
+                domain=rule.domain,
+                action=rule.action,
+                rule_name=rule.name,
+            ))
+
+        # If the primary rule defines an extract_pattern
+        evidence_detail = self._extract_detail(primary_rule, normalized)
 
         return ClassificationResult(
             primary_domain=primary_rule.domain,
@@ -180,91 +193,63 @@ class Classifier:
             label=primary_rule.label or primary_rule.subcategory,
             secondary_hint=secondary_hint,
             all_labels=all_labels,
+            evidence_detail=evidence_detail,
         )
+
+    def _extract_detail(self, rule: RuleDefinition, normalized: str) -> Optional[str]:
+        """Run the rule's optional extract_pattern and return the first non-empty named capture.
+        Result is trimmed and capped at 400 chars to keep tooltips usable.
+        """
+        if not rule.extract_pattern:
+            return None
+        # Use the load-time-cached compiled regex
+        compiled = self._compiled_extractors.get(rule.name)
+        if compiled is None:
+            return None
+        try:
+            m = compiled.search(normalized, timeout=_USER_PATTERN_TIMEOUT)
+        except (_regex.error, TimeoutError, re.error):
+            return None
+        if not m:
+            return None
+        for group_name, value in (m.groupdict() or {}).items():
+            if value and value.strip():
+                # Trim and cap — keeps tooltips readable for composite captures.
+                v = value.strip()
+                return v if len(v) <= 400 else (v[:397] + "...")
+        return None
 
     def _normalize_log(self, raw_text: str) -> str:
-        """
-        Normalize log text by removing formatting artifacts.
-
-        Sequential cleaning steps:
-        1. Strip ANSI escape sequences
-        2. Remove ISO 8601 timestamps
-        3. Remove Unix epoch timestamps
-        4. Remove thread identifiers
-        5. Remove log level markers (case-insensitive)
-        6. Collapse horizontal whitespace
-        7. Strip leading/trailing whitespace
-
-        Args:
-            raw_text: Raw console output.
-
-        Returns:
-            Normalized text with semantic content preserved.
+        """Strip log noise (ANSI codes, timestamps, thread ids, levels) for pattern matching.
+        Uses the module-level _NORMALIZATION_REGEXES table compiled once at import time.
         """
         text = raw_text
-
-        # Step 1: Strip ANSI escape sequences and color codes
-        text = re.sub(r"\x1b\[[0-9;]*m|\x1b\(B", "", text)
-
-        # Step 2: Remove ISO 8601 timestamps
-        text = re.sub(
-            r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?",
-            "",
-            text,
-        )
-
-        # Step 3: Remove Unix epoch timestamps (10 or 13 digit)
-        text = re.sub(r"\b\d{10}\b|\b\d{13}\b", "", text)
-
-        # Step 4: Remove thread identifiers [tid:xxx], [t:xxx], [thread:xxx], etc.
-        text = re.sub(
-            r"\[(?:tid|thread|t|thr)[:=]?[\w\-]+\]", "", text, flags=re.IGNORECASE
-        )
-
-        # Step 5: Remove log level markers (case-insensitive)
-        text = re.sub(
-            r"\[(DEBUG|INFO|WARN|WARNING|ERROR|FATAL|CRITICAL|TRACE)\]",
-            "",
-            text,
-            flags=re.IGNORECASE,
-        )
-
-        # Step 6: Collapse horizontal whitespace (preserve newlines)
-        text = re.sub(r"[ \t]+", " ", text)
-
-        # Step 7: Strip leading/trailing whitespace
-        text = text.strip()
-
-        return text
+        for pattern, replacement in _NORMALIZATION_REGEXES:
+            text = pattern.sub(replacement, text)
+        return text.strip()
 
     def _evaluate_rules(
         self, normalized_text: str
     ) -> List[Tuple[RuleDefinition, str, int]]:
-        """
-        Evaluate all rules in priority order.
-
-        For each rule, test each pre-compiled pattern via pattern.search().
-        On first match within a rule: record (rule, pattern_string, line_number), break to next rule.
-        Collect ALL matching rules (not just first) for secondary hint detection.
-
-        Args:
-            normalized_text: Normalized log text.
-
-        Returns:
-            List of (RuleDefinition, matched_pattern_str, match_line_number) tuples,
-            ordered by rule priority. Empty list if no matches.
+        """Walk every rule in priority order and record the first pattern hit per rule.
+        Skips remaining rules in a domain once that domain has produced its winning hit.
         """
         matches: List[Tuple[RuleDefinition, str, int]] = []
+        domains_with_hit: set = set()
 
         for rule in self.rules:
+            if rule.domain in domains_with_hit:
+                continue
             patterns = self._compiled_patterns.get(rule.name, [])
             for compiled_pattern in patterns:
-                match = compiled_pattern.search(normalized_text)
+                try:
+                    match = compiled_pattern.search(normalized_text, timeout=_USER_PATTERN_TIMEOUT)
+                except (_regex.error, TimeoutError):
+                    match = None
                 if match:
-                    # Determine line number of the match
                     line_num = normalized_text[: match.start()].count("\n")
-                    # Record match and break to next rule
                     matches.append((rule, match.group(0), line_num))
+                    domains_with_hit.add(rule.domain)
                     break
 
         return matches
@@ -272,17 +257,7 @@ class Classifier:
     def _extract_evidence(
         self, normalized_text: str, match_line: int, context_lines: int = 5
     ) -> str:
-        """
-        Extract evidence snippet around the matched line.
-
-        Args:
-            normalized_text: Normalized log text.
-            match_line: Line number of the match.
-            context_lines: Number of lines above and below to include.
-
-        Returns:
-            Evidence snippet as a string. Empty string if match_line is invalid.
-        """
+        """Return ``context_lines`` lines surrounding ``match_line``."""
         lines = normalized_text.split("\n")
 
         if match_line < 0 or match_line >= len(lines):
@@ -297,133 +272,85 @@ class Classifier:
     def _determine_confidence(
         self, primary: RuleDefinition, all_matches: List, pattern: str
     ) -> ConfidenceLevel:
+        """Score the classification's confidence: STRONG (single domain, specific pattern),
+        PARTIAL (multi-domain or short pattern), or UNKNOWN (no matches).
         """
-        Determine confidence level for the classification.
-
-        Rules:
-        - No matches → UNKNOWN
-        - Single domain matched AND len(pattern) > 15 → STRONG
-        - Multiple domains matched OR len(pattern) <= 15 → PARTIAL
-        - 3+ distinct domains matched → PARTIAL (forced)
-        - 4+ rules spanning 3+ domains AND primary.priority > 50 → UNKNOWN
-
-        Args:
-            primary: The primary matched rule.
-            all_matches: All matched rules.
-            pattern: The matched pattern string.
-
-        Returns:
-            ConfidenceLevel.STRONG, PARTIAL, or UNKNOWN.
-        """
-        # No matches
         if not all_matches:
             return ConfidenceLevel.UNKNOWN
 
-        # Count distinct domains in all matches
         domains = set(rule.domain for rule, _, _ in all_matches)
         num_domains = len(domains)
 
-        # 3+ distinct domains matched → forced PARTIAL
+        # Three or more domains hit — too noisy to be confident in any one.
         if num_domains >= 3:
             return ConfidenceLevel.PARTIAL
 
-        # Single domain matched AND pattern is specific (> 15 chars) → STRONG
+        # Single-domain hit on a specific pattern is the only STRONG case.
         if num_domains == 1 and len(pattern) > 15:
             return ConfidenceLevel.STRONG
 
-        # Multiple domains OR generic pattern → PARTIAL
         return ConfidenceLevel.PARTIAL
 
-    def _load_rules_file(self, rules_path: str) -> None:
+    def _parse_rules_list(self, rules_data: list, *, source: str) -> List[RuleDefinition]:
+        """Validate and construct RuleDefinition objects from a YAML list.
+        Shared by single-file and multi-file loaders; `source` is used only in error messages.
         """
-        Load and validate classification rules, fallback labels, and domain
-        colors from the YAML rules file.  Populates self.rules,
-        self.fallback_labels, and self.domain_colors.
-
-        Args:
-            rules_path: Path to the YAML rules file.
-
-        Raises:
-            FileNotFoundError: If rules file does not exist.
-            ValueError: If YAML is invalid or rules have missing required fields.
-        """
-        try:
-            with open(rules_path, "r") as f:
-                data = yaml.safe_load(f)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Rules file not found: {rules_path}")
-        except yaml.YAMLError as e:
-            raise ValueError(f"Invalid YAML in rules file: {e}")
-
-        if not data or "rules" not in data:
-            raise ValueError("Rules file must contain a 'rules' key with a list value")
-
-        # Load optional top-level configuration sections
-        self.fallback_labels = data.get("fallback_labels", {})
-        self.domain_colors = data.get("domain_colors", {})
-
-        rules_data = data.get("rules", [])
-        if not isinstance(rules_data, list):
-            raise ValueError("'rules' key must contain a list")
-
-        rules: List[RuleDefinition] = []
+        out: List[RuleDefinition] = []
+        required = ["name", "priority", "domain", "subcategory", "impact", "patterns", "action"]
 
         for idx, rule_dict in enumerate(rules_data):
-            # Validate required fields
-            required_fields = [
-                "name",
-                "priority",
-                "domain",
-                "subcategory",
-                "impact",
-                "patterns",
-                "action",
-            ]
-            for fld in required_fields:
+            for fld in required:
                 if fld not in rule_dict:
                     raise ValueError(
-                        f"Rule at index {idx} missing required field: {fld}"
+                        f"{source}: rule at index {idx} missing required field '{fld}'"
                     )
 
-            # Validate field types and values
             if not isinstance(rule_dict["name"], str):
-                raise ValueError(f"Rule {idx}: 'name' must be a string")
+                raise ValueError(f"{source}: rule {idx} 'name' must be a string")
             if not isinstance(rule_dict["priority"], int) or rule_dict["priority"] < 0:
-                raise ValueError(f"Rule {idx}: 'priority' must be a non-negative integer")
+                raise ValueError(f"{source}: rule {idx} 'priority' must be a non-negative integer")
             if not isinstance(rule_dict["domain"], str):
-                raise ValueError(f"Rule {idx}: 'domain' must be a string")
+                raise ValueError(f"{source}: rule {idx} 'domain' must be a string")
             if not isinstance(rule_dict["subcategory"], str):
-                raise ValueError(f"Rule {idx}: 'subcategory' must be a string")
+                raise ValueError(f"{source}: rule {idx} 'subcategory' must be a string")
             if not isinstance(rule_dict["impact"], str):
-                raise ValueError(f"Rule {idx}: 'impact' must be a string")
+                raise ValueError(f"{source}: rule {idx} 'impact' must be a string")
             if not isinstance(rule_dict["patterns"], list) or not rule_dict["patterns"]:
-                raise ValueError(f"Rule {idx}: 'patterns' must be a non-empty list")
+                raise ValueError(f"{source}: rule {idx} 'patterns' must be a non-empty list")
             if not isinstance(rule_dict["action"], str):
-                raise ValueError(f"Rule {idx}: 'action' must be a string")
+                raise ValueError(f"{source}: rule {idx} 'action' must be a string")
 
-            # Validate patterns are strings and compile them to check for regex errors
             for pidx, pattern_str in enumerate(rule_dict["patterns"]):
                 if not isinstance(pattern_str, str):
                     raise ValueError(
-                        f"Rule {idx} pattern {pidx}: pattern must be a string"
+                        f"{source}: rule {idx} pattern {pidx} must be a string"
                     )
                 try:
                     re.compile(pattern_str)
                 except re.error as e:
                     raise ValueError(
-                        f"Rule {idx} pattern {pidx}: invalid regex: {e}"
+                        f"{source}: rule {idx} pattern {pidx} invalid regex: {e}"
                     )
 
-            # Get optional fields
             scope = rule_dict.get("scope", "global")
             if not isinstance(scope, str):
-                raise ValueError(f"Rule {idx}: 'scope' must be a string")
+                raise ValueError(f"{source}: rule {idx} 'scope' must be a string")
 
             label = rule_dict.get("label", "")
             if not isinstance(label, str):
-                raise ValueError(f"Rule {idx}: 'label' must be a string")
+                raise ValueError(f"{source}: rule {idx} 'label' must be a string")
 
-            rule = RuleDefinition(
+            extract_pattern = rule_dict.get("extract_pattern")
+            if extract_pattern is not None and not isinstance(extract_pattern, str):
+                raise ValueError(f"{source}: rule {idx} 'extract_pattern' must be a string when set")
+            # Pre-compile so a broken regex fails at load time, not on first match.
+            if extract_pattern:
+                try:
+                    re.compile(extract_pattern)
+                except re.error as e:
+                    raise ValueError(f"{source}: rule {idx} extract_pattern is invalid regex: {e}")
+
+            out.append(RuleDefinition(
                 name=rule_dict["name"],
                 priority=rule_dict["priority"],
                 domain=rule_dict["domain"],
@@ -433,23 +360,98 @@ class Classifier:
                 action=rule_dict["action"],
                 label=label,
                 scope=scope,
-            )
-            rules.append(rule)
+                extract_pattern=extract_pattern,
+            ))
+        return out
 
-        # Sort by priority ascending (lower priority number = higher precedence)
+    def _load_rules_dir(self, rules_dir: str) -> None:
+        """Load every YAML file in rules_dir and merge them into self.rules.
+        Underscore-prefixed files carry fallback_labels / domain_colors; rule names must be globally unique.
+        """
+        import glob
+        import os
+
+        files = sorted(glob.glob(os.path.join(rules_dir, "*.yaml")))
+        if not files:
+            raise FileNotFoundError(f"No YAML files found in rules directory: {rules_dir}")
+
+        all_rules: List[RuleDefinition] = []
+        seen_names: Dict[str, str] = {}  # rule name → file that defined it
+        meta_loaded = False
+
+        for path in files:
+            basename = os.path.basename(path)
+            try:
+                with open(path) as f:
+                    data = yaml.safe_load(f) or {}
+            except yaml.YAMLError as e:
+                raise ValueError(f"Invalid YAML in {path}: {e}")
+
+            if not isinstance(data, dict):
+                raise ValueError(f"{path}: top level must be a YAML mapping")
+
+            if "fallback_labels" in data:
+                self.fallback_labels.update(data["fallback_labels"])
+            if "domain_colors" in data:
+                self.domain_colors.update(data["domain_colors"])
+            if basename.startswith("_"):
+                meta_loaded = True
+                continue
+
+            rules_data = data.get("rules", [])
+            if not isinstance(rules_data, list):
+                raise ValueError(f"{path}: 'rules' must be a list")
+
+            file_rules = self._parse_rules_list(rules_data, source=basename)
+            for r in file_rules:
+                if r.name in seen_names:
+                    raise ValueError(
+                        f"Duplicate rule name '{r.name}' — defined in "
+                        f"both {seen_names[r.name]} and {basename}"
+                    )
+                seen_names[r.name] = basename
+            all_rules.extend(file_rules)
+
+        if not all_rules:
+            raise ValueError(f"No rules found in any file under {rules_dir}")
+
+        # Lower priority number = higher precedence.
+        all_rules.sort(key=lambda r: r.priority)
+        self.rules = all_rules
+
+        if not meta_loaded:
+            print(f"[INFO] No _meta.yaml in {rules_dir}; fallback_labels / domain_colors empty")
+
+    def _load_rules_file(self, rules_path: str) -> None:
+        """Single-file loader — read one YAML file and populate rules / labels / colors."""
+        try:
+            with open(rules_path) as f:
+                data = yaml.safe_load(f)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Rules file not found: {rules_path}")
+        except yaml.YAMLError as e:
+            raise ValueError(f"Invalid YAML in rules file: {e}")
+
+        if not data or "rules" not in data:
+            raise ValueError("Rules file must contain a 'rules' key with a list value")
+
+        self.fallback_labels = data.get("fallback_labels", {})
+        self.domain_colors = data.get("domain_colors", {})
+
+        rules_data = data.get("rules", [])
+        if not isinstance(rules_data, list):
+            raise ValueError("'rules' key must contain a list")
+
+        rules = self._parse_rules_list(rules_data, source=rules_path)
+
+        # Lower priority number = higher precedence.
         rules.sort(key=lambda r: r.priority)
 
         self.rules = rules
 
 
-# ============================================================================
-# CONSOLE PARSERS
-# ============================================================================
-
-# Regex for Maven/Surefire-style test summary lines:
-# [INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
-# [ERROR] Tests run: 5, Failures: 1, Errors: 1, Skipped: 1
-# Also matches without log-level prefix (bare summary lines).
+# Maven/Surefire test summary lines, with or without a log-level prefix:
+#   [INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
 _TEST_SUMMARY_RE = re.compile(
     r"Tests\s+run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+)",
     re.IGNORECASE,
@@ -457,19 +459,8 @@ _TEST_SUMMARY_RE = re.compile(
 
 
 def parse_console_test_metrics(console_text: str) -> Optional[TestMetrics]:
-    """
-    Parse console output for test summary metrics.
-
-    Scans the full console text for Maven/Surefire-style test summary lines.
-    If multiple matches exist, uses the LAST valid match (deterministic rule:
-    the final summary is the aggregate).
-
-    Args:
-        console_text: Raw console log output from Jenkins.
-
-    Returns:
-        TestMetrics with extracted counts if a summary line is found;
-        None if no summary line is detected.
+    """Pull Maven/Surefire test-summary counts from console text.
+    Returns the LAST summary line (Maven's final aggregate), or None when no summary is found.
     """
     if not console_text:
         return None
@@ -478,7 +469,7 @@ def parse_console_test_metrics(console_text: str) -> Optional[TestMetrics]:
     if not matches:
         return None
 
-    # Use the last match — in Maven output, the final summary is the aggregate
+    # Maven prints intermediate per-module summaries; the last is the aggregate.
     last = matches[-1]
     tests_run = int(last.group(1))
     failures = int(last.group(2))
@@ -498,13 +489,13 @@ def parse_console_test_metrics(console_text: str) -> Optional[TestMetrics]:
     )
 
 
-# Regex for error-level log lines: [ERROR], [FATAL], [SEVERE], or ERROR: prefix
+# Error-level log lines: [ERROR] / [FATAL] / [SEVERE] / ERROR: / FATAL:.
 _ERROR_LINE_RE = re.compile(
     r"^\s*(?:\[(?:ERROR|FATAL|SEVERE)\]|ERROR:|FATAL:)\s*(.+)",
     re.MULTILINE | re.IGNORECASE,
 )
 
-# Patterns that hint at the build phase / step where the failure occurred
+# Hints at the build phase / step where the failure occurred.
 _FAILURE_PHASE_PATTERNS = [
     (re.compile(r"\[INFO\]\s+---\s+(\S+):(\S+)\s+\(([^)]+)\)", re.IGNORECASE), "maven_plugin"),
     (re.compile(r"(?:FAILURE|FAILED).*?in\s+(?:phase|step|stage)\s+['\"]?(\S+)", re.IGNORECASE), "phase_mention"),
@@ -521,24 +512,8 @@ def extract_error_logs(
     max_entries: int = 50,
     context_lines: int = 1,
 ) -> FailureEvidence:
-    """
-    Extract error-oriented log lines from console output.
-
-    Scans the console for lines matching failure-oriented patterns ([ERROR],
-    [FATAL], [SEVERE], ERROR:, FATAL:). Collects up to max_entries matched
-    lines, each with optional preceding context line for additional clarity.
-    Also infers the failure step/phase/context where possible.
-
-    This function should ONLY be called for non-passing jobs. Passed jobs
-    should not undergo failure-log extraction.
-
-    Args:
-        console_text: Raw console log output from Jenkins.
-        max_entries: Maximum number of error log entries to extract (default: 50).
-        context_lines: Number of lines before each error to capture as context (default: 1).
-
-    Returns:
-        FailureEvidence with error_logs, error_count, and failure_context populated.
+    """Extract error / fatal / severe lines from console output.
+    Only meaningful for non-passing jobs — callers should gate this behind a health-state check.
     """
     if not console_text:
         return FailureEvidence(error_logs=[], error_count=0, failure_context=None)
@@ -553,7 +528,6 @@ def extract_error_logs(
             if not message:
                 continue
 
-            # Determine the log level from the prefix
             line_upper = line.strip().upper()
             if "[FATAL]" in line_upper or "FATAL:" in line_upper:
                 level = "FATAL"
@@ -562,7 +536,6 @@ def extract_error_logs(
             else:
                 level = "ERROR"
 
-            # Capture preceding context line(s)
             ctx_start = max(0, line_idx - context_lines)
             context_before = None
             if ctx_start < line_idx:
@@ -570,7 +543,7 @@ def extract_error_logs(
                 context_before = "\n".join(ctx_lines).strip() or None
 
             entry = ErrorLogEntry(
-                line_number=line_idx + 1,  # 1-indexed
+                line_number=line_idx + 1,
                 message=message,
                 level=level,
                 context_before=context_before,
@@ -580,7 +553,6 @@ def extract_error_logs(
             if len(error_entries) >= max_entries:
                 break
 
-    # Infer failure context / step
     failure_context = _infer_failure_context(console_text)
 
     return FailureEvidence(
@@ -591,18 +563,8 @@ def extract_error_logs(
 
 
 def _infer_failure_context(console_text: str) -> Optional[str]:
-    """
-    Best-effort identification of the build phase or step where the failure occurred.
-
-    Scans the console for phase/step markers. Uses the LAST match (closest to
-    the failure point in log output) as the most relevant context.
-
-    Args:
-        console_text: Raw console log output.
-
-    Returns:
-        A human-readable string identifying the failure phase/step, or None
-        if no phase markers are detected.
+    """Best-effort guess at the build phase where the failure happened.
+    Uses the LAST phase marker found — the one closest to the failure point in the log.
     """
     last_match_text = None
 
@@ -611,7 +573,7 @@ def _infer_failure_context(console_text: str) -> Optional[str]:
         if not matches:
             continue
 
-        m = matches[-1]  # Last match is closest to the failure
+        m = matches[-1]
 
         if phase_type == "maven_plugin":
             plugin = m.group(1)
@@ -631,52 +593,44 @@ def _infer_failure_context(console_text: str) -> Optional[str]:
         elif phase_type == "scm":
             last_match_text = "SCM / Checkout phase"
 
-        # Don't break — keep scanning for later patterns that may be more specific
+        # Keep scanning — later patterns may give a more specific hint.
 
     return last_match_text
 
 
-# ============================================================================
-# ANALYSIS ORCHESTRATOR
-# ============================================================================
-
 class AnalysisOrchestrator:
-    """
-    Orchestrates the two-stage analysis pipeline for Jenkins jobs.
-
-    Manages concurrent job processing via ThreadPoolExecutor and streams
-    results via callback events (SSE).
-
-    Stage 1: Parallel metadata fetch for ALL jobs.
-    Stage 2: Parallel deep analysis (console fetch + classification) for FAILED/UNSTABLE only.
+    """Two-stage parallel analysis pipeline: Stage 1 fetches metadata for every job,
+    Stage 2 does deep classification only for FAILED / UNSTABLE jobs; results stream via SSE callbacks.
     """
 
     def __init__(
         self,
         client: JenkinsClient,
         classifier: Classifier,
-        max_workers: int = 24,
+        max_workers: int = DEFAULT_WORKERS,
         promotion_time: Optional[datetime] = None,
+        view_prefetch: Optional["ViewPrefetch"] = None,
     ) -> None:
-        """
-        Initialize the AnalysisOrchestrator.
-
-        Args:
-            client: JenkinsClient instance for API interactions.
-            classifier: Classifier instance for failure classification.
-            max_workers: Maximum number of worker threads (default: 24).
-            promotion_time: Optional release-promotion cutoff. When set, every
-                JobRecord serialized by this orchestrator's SSE callbacks will
-                include a ``release_status`` field derived from this time.
-                Threaded through ``to_dict(promotion_time=...)`` so there is
-                exactly one place that knows the release-validation rule.
+        """Initialise the orchestrator with shared client, classifier and worker pool.
+        Optional view_prefetch lets Stage 1 skip per-job metadata calls; promotion_time threads release-validation through every to_dict().
         """
         self.client = client
         self.classifier = classifier
         self.max_workers = max_workers
         self.promotion_time = promotion_time
-        # Internal record store — maps job_url to JobRecord for Stage 2 access
+        self.view_prefetch = view_prefetch
+        # job_url → JobRecord, populated during Stage 1 for Stage 2 reuse.
         self._records: Dict[str, JobRecord] = {}
+        # Set when a newer operation supersedes us — workers exit, the
+        # as_completed loops break, and no further events fire. In-flight
+        # Jenkins calls still finish naturally (no atomic future cancel).
+        self._cancel_flag = threading.Event()
+
+    def cancel(self) -> None:
+        """Signal workers and loops to stop; idempotent.
+        Called by the SSE driver when a newer fetch supersedes this one.
+        """
+        self._cancel_flag.set()
 
     def run_stage_1(
         self,
@@ -684,27 +638,14 @@ class AnalysisOrchestrator:
         operation_id: str,
         on_result: Callable[[SSEEvent], None],
     ) -> List[JobRecord]:
-        """
-        Parallel metadata fetch for all jobs.
-
-        Executes Stage 1 (metadata collection) for all provided jobs concurrently.
-        Streams results via SSE callbacks.
-
-        Args:
-            jobs: List of {"name": str, "url": str} dicts from Mode A or B.
-            operation_id: Unique operation ID for this fetch batch.
-            on_result: Callback invoked with JOB_METADATA, JOB_ERROR, and
-                       PROGRESS_UPDATE events.
-
-        Returns:
-            List of JobRecord objects in completion order. Error records included
-            with health_state=FETCH_ERROR.
+        """Parallel Stage 1 metadata fetch across every supplied job.
+        Streams JOB_METADATA / JOB_ERROR / PROGRESS_UPDATE events; failures become FETCH_ERROR records.
         """
         results: List[JobRecord] = []
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
-                executor.submit(self._process_stage_1_job, job): job
+                executor.submit(self._stage_1_worker, job): job
                 for job in jobs
             }
 
@@ -712,14 +653,20 @@ class AnalysisOrchestrator:
             total_count = len(jobs)
 
             for future in as_completed(futures):
+                # Superseded by a newer operation — stop emitting events.
+                if self._cancel_flag.is_set():
+                    break
+
                 job = futures[future]
 
                 try:
                     record = future.result()
+                    if record is None:
+                        # Worker bailed on the cancel flag.
+                        continue
                     results.append(record)
                     self._records[record.job_url] = record
 
-                    # Emit JOB_METADATA event
                     metadata_event = SSEEvent(
                         event_type=SSEEventType.JOB_METADATA,
                         job_id=record.job_url,
@@ -740,7 +687,6 @@ class AnalysisOrchestrator:
                     results.append(error_record)
                     self._records[error_record.job_url] = error_record
 
-                    # Emit JOB_ERROR event
                     error_event = SSEEvent(
                         event_type=SSEEventType.JOB_ERROR,
                         job_id=error_record.job_url,
@@ -753,7 +699,6 @@ class AnalysisOrchestrator:
                     )
                     on_result(error_event)
 
-                # Emit PROGRESS_UPDATE event after each job completes
                 completed_count += 1
                 progress_event = SSEEvent(
                     event_type=SSEEventType.PROGRESS_UPDATE,
@@ -775,22 +720,9 @@ class AnalysisOrchestrator:
         operation_id: str,
         on_result: Callable[[SSEEvent], None],
     ) -> List[JobRecord]:
+        """Parallel deep analysis for FAILED / UNSTABLE jobs only; mutates records in-place.
+        Other statuses are returned unchanged.
         """
-        Parallel deep analysis for FAILED/UNSTABLE jobs only.
-
-        Executes Stage 2 (console fetch + classification) for jobs with
-        failed/unstable status. Mutates records in-place.
-
-        Args:
-            records: List of JobRecord objects to analyze. Only FAILED/UNSTABLE
-                     records are processed; others are returned unchanged.
-            operation_id: Unique operation ID for this refresh batch.
-            on_result: Callback invoked with JOB_ENRICHED and PROGRESS_UPDATE events.
-
-        Returns:
-            Updated JobRecord objects (mutated in-place).
-        """
-        # Filter to FAILED/UNSTABLE jobs only
         failed_records = [
             r for r in records
             if r.health_state in (HealthState.FAILED, HealthState.UNSTABLE)
@@ -801,7 +733,7 @@ class AnalysisOrchestrator:
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
-                executor.submit(self._process_stage_2_job, record): record
+                executor.submit(self._stage_2_worker, record): record
                 for record in failed_records
             }
 
@@ -809,17 +741,17 @@ class AnalysisOrchestrator:
             total_count = len(failed_records)
 
             for future in as_completed(futures):
+                if self._cancel_flag.is_set():
+                    break
                 record = futures[future]
 
                 try:
-                    # _process_stage_2_job mutates record in-place
                     future.result()
                 except Exception as e:
-                    # On error, keep classification as None
+                    # Leave classification empty; surface the error to the UI.
                     record.classification = None
                     record.error_message = f"Stage 2 classification failed: {str(e)}"
 
-                # Emit JOB_ENRICHED event
                 enriched_event = SSEEvent(
                     event_type=SSEEventType.JOB_ENRICHED,
                     job_id=record.job_url,
@@ -828,7 +760,6 @@ class AnalysisOrchestrator:
                 )
                 on_result(enriched_event)
 
-                # Emit PROGRESS_UPDATE event
                 completed_count += 1
                 progress_event = SSEEvent(
                     event_type=SSEEventType.PROGRESS_UPDATE,
@@ -849,72 +780,58 @@ class AnalysisOrchestrator:
         job_url: str,
         job_name: str,
     ) -> JobRecord:
-        """
-        Synchronous Stage 1 + Stage 2 for a single job.
-
-        Used for on-demand analysis. Blocks caller until both stages complete.
-
-        Args:
-            job_url: Full URL to the Jenkins job.
-            job_name: Name of the Jenkins job.
-
-        Returns:
-            Complete JobRecord with classification (if failed/unstable).
-
-        Raises:
-            JenkinsClientError: On unrecoverable fetch errors.
-        """
-        # Stage 1: Fetch metadata
+        """Synchronously run Stage 1 (and Stage 2 if needed) for one job."""
         job = {"name": job_name, "url": job_url}
         record = self._process_stage_1_job(job)
 
-        # Stage 2: Classify if failed/unstable
         if record.health_state in (HealthState.FAILED, HealthState.UNSTABLE):
             self._process_stage_2_job(record)
 
         return record
 
+    # Worker wrappers — keep the cancellation check out of per-job business logic.
+    # Returning None when the flag is set before a worker starts lets the
+    # consumer loop skip the future cleanly.
+
+    def _stage_1_worker(self, job: dict):
+        if self._cancel_flag.is_set():
+            return None
+        return self._process_stage_1_job(job)
+
+    def _stage_2_worker(self, record: JobRecord):
+        if self._cancel_flag.is_set():
+            return None
+        return self._process_stage_2_job(record)
+
     def _process_stage_1_job(self, job: dict) -> JobRecord:
-        """
-        Per-job Stage 1 logic (metadata collection + console metric extraction).
-
-        Runs in ThreadPoolExecutor worker. Fetches latest build info, test metrics
-        (API first, then console fallback), previous build info, and last passing
-        build. For EVERY job, if the Jenkins test report API does not provide
-        metrics, the console output is fetched and parsed for Maven/Surefire-style
-        test summary lines to extract tests_run, failures, errors, skipped, and
-        derived passed count.
-
-        IMPORTANT: Failure-specific console analysis (error-log extraction,
-        failure-context inference) is NOT performed here. That processing is
-        deferred to Stage 2, which runs only for non-passing jobs (FAILED,
-        UNSTABLE, etc.). Passed jobs never undergo failure-log extraction.
-
-        Args:
-            job: Dict with "name" and "url" keys.
-
-        Returns:
-            JobRecord with Stage 1 fields populated, including enriched
-            test_metrics from either the API or console parsing.
-            failure_evidence is always None at this stage.
-
-        Raises:
-            JenkinsClientError: If fetch_build_info("lastBuild") fails.
+        """Stage 1 worker — fetch metadata and best-effort test metrics for one job.
+        Tries /testReport first, falls back to parsing Maven summary lines from the console tail.
         """
         job_name = job.get("name", "Unknown")
         job_url = job.get("url", "")
 
-        # 1. Fetch latest build info (required — propagate error)
-        latest = self.client.fetch_build_info(job_url, "lastBuild")
+        # When the view-level batched fetch ran
+        prefetched = (
+            self.view_prefetch.get(job_url) if self.view_prefetch else None
+        )
 
-        # 2. Fetch the recent build window UP-FRONT 
+        # Latest build is required — propagate failure to the orchestrator.
+        if prefetched is not None and prefetched.last_build is not None:
+            latest = prefetched.last_build
+        else:
+            latest = self.client.fetch_build_info(job_url, "lastBuild")
+
+        # Window of 5: three_run_context uses the first three; the rest power the sparkline.
         recent_builds = []
-        try:
-            recent_builds = self.client.fetch_recent_builds(job_url, count=3)
-        except JenkinsClientError:
-            pass  # Silently skip — context will be partial
+        if prefetched is not None and prefetched.recent_builds:
+            recent_builds = prefetched.recent_builds
+        else:
+            try:
+                recent_builds = self.client.fetch_recent_builds(job_url, count=5)
+            except JenkinsClientError:
+                pass  # Partial context is fine.
 
-        # Derive ``previous`` from the recent window — first non-latest entry.
+        # First non-latest entry — used as "previous" for the three-run view.
         previous = None
         for rb in recent_builds:
             if rb.build_number == latest.build_number:
@@ -922,7 +839,7 @@ class AnalysisOrchestrator:
             previous = rb
             break
 
-        # First COMPLETED previous build
+        # First completed previous build — used as the metrics source when latest is still running.
         previous_completed = None
         for rb in recent_builds:
             if rb.build_number == latest.build_number:
@@ -932,13 +849,14 @@ class AnalysisOrchestrator:
             previous_completed = rb
             break
 
-        # 3. Fetch test metrics.
+        # Fetch test metrics — diag breadcrumbs explain misses for operators.
         test_metrics = None
         diag: List[str] = []
         metrics_build_number = latest.build_number
         is_in_flight_or_aborted = latest.status in (
             BuildStatus.IN_PROGRESS, BuildStatus.ABORTED,
         )
+        # In-flight builds don't have metrics yet; fall back to the previous completed run.
         if is_in_flight_or_aborted and previous_completed is not None:
             metrics_build_number = previous_completed.build_number
             try:
@@ -965,7 +883,7 @@ class AnalysisOrchestrator:
             except JenkinsClientError as e:
                 diag.append("api_err:%s" % (e.status_code or "x"))
 
-        # Console-fallback parsing (only for terminal builds).
+        # API said no — try parsing test counts out of the console tail.
         if test_metrics is None and not is_in_flight_or_aborted:
             try:
                 console_text = self.client.fetch_console_tail(
@@ -994,16 +912,19 @@ class AnalysisOrchestrator:
                     metrics_unavailable=True,
                 )
         elif test_metrics is None:
-            # In-progress / aborted with no previous completed build
+            # In-flight or aborted with no completed predecessor.
             diag.append("inflight_no_prev")
             test_metrics = TestMetrics(
                 metrics_source=None,
                 metrics_unavailable=True,
             )
 
-        # Stamp the diagnostic breadcrumb on the metrics record and emit
-        # a single log line so operators can grep stdout for the pattern.
-        test_metrics.metrics_diagnostic = ",".join(diag)
+        # Cap diag size — retries against a slow Jenkins can otherwise balloon
+        # this into KB per record across a large fetch universe.
+        diag_str = ",".join(diag[-10:])
+        if len(diag_str) > 500:
+            diag_str = diag_str[:497] + "..."
+        test_metrics.metrics_diagnostic = diag_str
         if test_metrics.metrics_unavailable:
             _log.warning(
                 "MISSING [%s] build#%s status=%s diag=%s",
@@ -1018,10 +939,10 @@ class AnalysisOrchestrator:
                 test_metrics.metrics_diagnostic,
             )
 
-        # Find ``last_passed`` deterministically: if the latest run is itself
-        # a SUCCESS, that's it; otherwise scan the recent window first (cheap)
-        # and fall back to a single allBuilds{0,50} query so jobs whose last
-        # green is older than the 3-run window still resolve correctly.
+        # Resolve last_passed: latest if green; else recent window;
+        # else the batched view's lastSuccessfulBuild (free — already
+        # fetched); else fall back to a depth-50 allBuilds query for
+        # the per-job path so older greens still resolve.
         last_passed = None
         if latest.status == BuildStatus.SUCCESS:
             last_passed = latest
@@ -1030,32 +951,29 @@ class AnalysisOrchestrator:
                 if rb.status == BuildStatus.SUCCESS:
                     last_passed = rb
                     break
+            if last_passed is None and prefetched is not None and prefetched.last_successful_build is not None:
+                last_passed = prefetched.last_successful_build
             if last_passed is None:
                 try:
                     last_passed = self.client.fetch_last_passed(job_url, depth=50)
                 except JenkinsClientError:
-                    pass  # Silently skip — last_passed stays None
+                    pass
 
-        # 5. Construct ThreeRunContext (backwards-compatible)
         context = ThreeRunContext(
             latest=latest,
             previous=previous,
             last_passed=last_passed,
         )
 
-        # 7. Determine health state
         health_state = self._determine_health_state(context)
 
-        # 8. Determine data completeness
         data_completeness = self._determine_data_completeness(
             test_metrics=test_metrics,
             previous=previous,
             last_passed=last_passed,
         )
 
-        # 9. Create JobRecord with enriched test_metrics
-        #    failure_evidence is intentionally None — it will only be populated
-        #    in Stage 2 for non-passing jobs.
+        # failure_evidence stays None — Stage 2 fills it in for non-passing jobs.
         record = JobRecord(
             job_name=job_name,
             job_url=job_url,
@@ -1070,34 +988,17 @@ class AnalysisOrchestrator:
             recent_builds=recent_builds,
         )
 
-        # Store console text on record for potential Stage 2 reuse
+        # Stash console text so Stage 2 can reuse it without a second fetch.
         record._console_text = console_text
 
         return record
 
     def _process_stage_2_job(self, record: JobRecord) -> JobRecord:
-        """
-        Per-job Stage 2 logic (console fetch + classification + error-log
-        extraction + console metrics enrichment).
-
-        Runs in ThreadPoolExecutor worker. Only invoked for non-passing jobs
-        (FAILED, UNSTABLE, etc.). Fetches console output (or reuses console
-        text cached by Stage 1), classifies the failure, extracts [ERROR]
-        log lines with context, infers the failure step/phase, and enriches
-        test metrics from console if Stage 1 did not already provide them.
-
-        Passed jobs never reach this method — they are filtered out by
-        run_stage_2(). Mutates record in-place.
-
-        Args:
-            record: JobRecord from Stage 1 (mutated in-place).
-
-        Returns:
-            Mutated record with classification, failure_evidence, and
-            console-derived metrics populated.
+        """Stage 2 worker — classify failure, extract error lines, top up missing test metrics.
+        Reuses Stage 1's console text when available; mutates record in place.
         """
         try:
-            # 1. Reuse console text from Stage 1 if available, otherwise fetch
+            # Reuse Stage 1's console fetch if it landed; otherwise fetch fresh.
             console_text = getattr(record, '_console_text', None) or ""
             if not console_text:
                 try:
@@ -1108,20 +1009,15 @@ class AnalysisOrchestrator:
                     )
                 except JenkinsClientError:
                     console_text = ""
-                    # Update data_completeness to reflect missing console
                     if record.data_completeness == DataCompleteness.COMPLETE:
                         record.data_completeness = DataCompleteness.PARTIAL
 
-            # 2. Classify
             try:
                 classification_result = self.classifier.classify(console_text)
                 record.classification = classification_result
             except Exception:
                 record.classification = None
 
-            # 3. Extract error logs and failure context (failure-specific analysis)
-            #    This ONLY runs for non-passing jobs — passed jobs never enter
-            #    _process_stage_2_job, so no wasted overhead.
             if console_text:
                 record.failure_evidence = extract_error_logs(console_text)
             else:
@@ -1129,9 +1025,7 @@ class AnalysisOrchestrator:
                     error_logs=[], error_count=0, failure_context=None,
                 )
 
-            # 4. Enrich test metrics from console if Stage 1 didn't already
-            #    provide real metrics (i.e. metrics_unavailable is True or
-            #    test_metrics is still None)
+            # Top up missing metrics from the console as a last resort.
             needs_console_metrics = (
                 record.test_metrics is None
                 or record.test_metrics.metrics_unavailable
@@ -1151,7 +1045,6 @@ class AnalysisOrchestrator:
                     metrics_unavailable=True,
                 )
 
-            # 5. Update stage
             record.stage = StageCompletion.STAGE_2
 
         except Exception as e:
@@ -1160,27 +1053,18 @@ class AnalysisOrchestrator:
         return record
 
     def _determine_health_state(self, context: ThreeRunContext) -> HealthState:
-        """
-        Map build status to health state.
-
-        Args:
-            context: ThreeRunContext containing latest build info.
-
-        Returns:
-            HealthState enum value.
-        """
+        """Map the latest build's BuildStatus to a HealthState."""
         status = context.latest.status
 
         if status == BuildStatus.SUCCESS:
             return HealthState.PASSED
-        elif status == BuildStatus.FAILURE:
+        if status == BuildStatus.FAILURE:
             return HealthState.FAILED
-        elif status == BuildStatus.UNSTABLE:
+        if status == BuildStatus.UNSTABLE:
             return HealthState.UNSTABLE
-        elif status == BuildStatus.ABORTED:
+        if status == BuildStatus.ABORTED:
             return HealthState.ABORTED
-        else:
-            return HealthState.UNKNOWN
+        return HealthState.UNKNOWN
 
     def _determine_data_completeness(
         self,
@@ -1188,12 +1072,7 @@ class AnalysisOrchestrator:
         previous=None,
         last_passed=None,
     ) -> DataCompleteness:
-        """
-        Determine data completeness level based on available fields.
-
-        Returns:
-            DataCompleteness enum value.
-        """
+        """Score how complete the record is based on populated fields."""
         if test_metrics is not None and previous is not None and last_passed is not None:
             return DataCompleteness.COMPLETE
         if test_metrics is not None or previous is not None or last_passed is not None:

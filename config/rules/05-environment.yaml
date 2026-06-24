@@ -1,0 +1,85 @@
+# Infrastructure failures — network, DNS, TLS, database, out-of-memory,
+# file permissions. Anything below the application layer; usually means
+# ops needs to look, not the product team.
+
+rules:
+  - name: "connection_refused"
+    priority: 56
+    domain: "Environment / Infrastructure"
+    subcategory: "Connection Refused"
+    impact: "Infrastructure Likely"
+    label: "Service Unreachable"
+    patterns:
+      - "Connection refused"
+      - "ECONNREFUSED"
+      - "connect ECONNREFUSED"
+    action: "Target service is down or firewalled. Verify it's running and reachable from the runner."
+    scope: "global"
+
+  - name: "dns_failure"
+    priority: 58
+    domain: "Environment / Infrastructure"
+    subcategory: "DNS Resolution"
+    impact: "Infrastructure Likely"
+    label: "DNS Resolution Failure"
+    patterns:
+      - "UnknownHostException"
+      - "Name or service not known"
+      - "DNS resolution failed"
+      - "getaddrinfo (failed|ENOTFOUND)"
+    action: "Hostname didn't resolve. Verify DNS and that the env URL is correct."
+    scope: "global"
+
+  - name: "ssl_error"
+    priority: 60
+    domain: "Environment / Infrastructure"
+    subcategory: "SSL / TLS Error"
+    impact: "Infrastructure Likely"
+    label: "SSL/TLS Error"
+    patterns:
+      - "SSLHandshakeException"
+      - "CERTIFICATE_VERIFY_FAILED"
+      - "unable to find valid certification path"
+      - "PKIX path building failed"
+    action: "Cert chain not trusted or expired. Refresh truststore or fix cert on the target service."
+    scope: "global"
+
+  - name: "db_connection"
+    priority: 62
+    domain: "Environment / Infrastructure"
+    subcategory: "Database Connection"
+    impact: "Infrastructure Likely"
+    label: "DB Connection Issue"
+    patterns:
+      - "Connection pool exhausted"
+      - "could not connect to.*database"
+      - "ORA-\\d{5}"
+      - "Communications link failure"
+    action: "DB layer is failing. Check DB health, pool sizing, and credentials."
+    scope: "global"
+
+  - name: "oom_error"
+    priority: 64
+    domain: "Environment / Infrastructure"
+    subcategory: "Out of Memory"
+    impact: "Infrastructure Likely"
+    label: "Out of Memory"
+    patterns:
+      - "java\\.lang\\.OutOfMemoryError"
+      - "GC overhead limit exceeded"
+      - "Cannot allocate memory"
+    action: "JVM ran out of heap. Increase -Xmx or investigate leak in the test process."
+    scope: "global"
+
+  - name: "permission_denied"
+    priority: 66
+    domain: "Environment / Infrastructure"
+    subcategory: "Permission Denied"
+    impact: "Infrastructure Likely"
+    label: "Permission Denied"
+    patterns:
+      - "Permission denied"
+      - "Access is denied"
+      - "AccessDeniedException"
+    action: "File/dir/resource permission rejected. Check runner user privileges."
+    scope: "global"

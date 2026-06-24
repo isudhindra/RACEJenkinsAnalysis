@@ -1,0 +1,77 @@
+[project]
+name = "race"
+version = "0.1.0"
+description = "RACE — Release Assurance & Confidence Engine — local dashboard for release validation and failure classification."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Sudhindra Immidi" }]
+
+dependencies = [
+    "Flask>=3.0",
+    "requests>=2.31",
+    "PyYAML>=6.0",
+    # python-dotenv>=1.2.2 closes CVE-2026-28684. See SECURITY-AUDIT.md MEDIUM-1.
+    "python-dotenv>=1.2.2",
+    # flask-limiter — per-IP rate limits on /api endpoints (MEDIUM-5).
+    "flask-limiter>=3.5",
+    # regex — drop-in replacement for stdlib re with timeout=... support;
+    # used by the classifier to prevent ReDoS via user-supplied YAML (HIGH-2).
+    "regex>=2024.5.15",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4",
+    "mypy>=1.0",
+    # pip-tools — regenerate requirements.lock.txt via `bash scripts/lock.sh`
+    # after touching the dependencies above.
+    "pip-tools>=7.4",
+]
+
+# Hatchling — zero-config build backend.  Needed for `pip install -e .`
+# to make `import race` work from anywhere.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["race"]
+
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# E/F/W = pycodestyle / pyflakes basics
+# I     = isort import ordering
+# N     = pep8-naming
+# UP    = pyupgrade (modernise syntax for current Python target)
+# B     = flake8-bugbear (likely bugs)
+# C4    = flake8-comprehensions
+# SIM   = flake8-simplify
+# RET   = flake8-return
+select = ["E", "F", "I", "W", "N", "UP", "B", "C4", "SIM", "RET"]
+ignore = [
+    "E501",   # line-too-long — handled by formatter, not strict
+    "B008",   # function calls in argument defaults — Flask uses them legitimately
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+
+# ---
+# mypy — static type checking.
+# ---
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+no_implicit_optional = true
+ignore_missing_imports = true
+exclude = ["^scripts/", "^build/", "^dist/"]

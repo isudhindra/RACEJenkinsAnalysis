@@ -1,9 +1,8 @@
-// diagnostics.js — Developer diagnostics panel (console + network tabs).
-// Captures application-level logs, network request traces, and runtime errors
-// into a slide-up panel the developer can open from the toolbar.
+// diagnostics.js — Developer diagnostics slide-up panel.
+// Captures app logs, network traces, and runtime errors for the Console and Network tabs.
 'use strict';
 
-// In-memory store for all diagnostic entries (capped at 500 per tab).
+// In-memory store for diagnostic entries (capped at 500 per tab).
 const _diagStore = {
     consoleLogs: [],
     networkLogs: [],
@@ -12,10 +11,10 @@ const _diagStore = {
     activeTab: 'console'
 };
 
-// ── Core loggers ───────────────────────────────────────────────────────
+//  Core loggers ─
 
-// Record an application-level log entry (shown in the Console tab).
-// severity: 'error' | 'warning' | 'info'; source: module name; detail: optional metadata.
+// Record an app-level entry shown in the Console tab.
+// severity: 'error' | 'warning' | 'info'; source: module; detail: optional metadata.
 function diagLog(severity, source, message, detail) {
     const entry = {
         ts: new Date(),
@@ -36,8 +35,7 @@ function diagLog(severity, source, message, detail) {
     }
 }
 
-// Record an HTTP request/response entry (shown in the Network tab).
-// Called after every backend API call with timing and error info.
+// Record an HTTP request/response entry shown in the Network tab.
 function diagLogNetwork(method, url, status, duration, error, detail) {
     const entry = {
         ts: new Date(),
@@ -62,8 +60,7 @@ function diagLogNetwork(method, url, status, duration, error, detail) {
     }
 }
 
-// Shorthand for logging a failed POST: writes to both Console and Network tabs,
-// and optionally shows an error toast. Replaces the recurring 3-line pattern.
+// Log a failed POST to Console + Network tabs and optionally toast the user.
 function reportFetchError(category, logMsg, endpoint, err, toastMsg, extra) {
     var meta = { stack: err.stack, raw: err.message };
     if (extra !== undefined) meta.extra = extra;
@@ -72,9 +69,8 @@ function reportFetchError(category, logMsg, endpoint, err, toastMsg, extra) {
     if (toastMsg) showToast(toastMsg, 'error');
 }
 
-// ── Internal UI helpers ────────────────────────────────────────────────
+//  Internal UI helpers 
 
-// Refresh the entry-count badge on a tab header.
 function _diagUpdateCount(tab) {
     const count = tab === 'console' ? _diagStore.consoleLogs.length : _diagStore.networkLogs.length;
     const el = document.getElementById('diag-count-' + tab);
@@ -84,19 +80,18 @@ function _diagUpdateCount(tab) {
     el.classList.toggle('empty', count === 0);
 }
 
-// Toggle the red dot on the toolbar diagnostics button when errors exist.
+// Toggle the toolbar's red diagnostics dot when errors exist.
 function _diagShowErrorDot(show) {
     const dot = document.getElementById('diag-error-dot');
     if (dot) dot.style.display = show ? '' : 'none';
 }
 
-// Format a Date into "HH:MM:SS.mmm" for the entry timestamp column.
+// Format a Date as "HH:MM:SS.mmm" for the timestamp column.
 function _diagFmtTime(d) {
     return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
         + '.' + String(d.getMilliseconds()).padStart(3, '0');
 }
 
-// Append a single console-log entry to the Console tab body.
 function _diagRenderConsoleEntry(entry) {
     const body = document.getElementById('diag-body-console');
     if (!body) return;
@@ -132,7 +127,6 @@ function _diagRenderConsoleEntry(entry) {
     body.appendChild(div);
 }
 
-// Append a single network entry to the Network tab body.
 function _diagRenderNetworkEntry(entry) {
     const body = document.getElementById('diag-body-network');
     if (!body) return;
@@ -170,27 +164,23 @@ function _diagRenderNetworkEntry(entry) {
     body.appendChild(div);
 }
 
-// Extract just the pathname from a URL for compact display.
 function _diagShortUrl(url) {
     try { return new URL(url, location.origin).pathname; } catch { return url; }
 }
 
-// Quick HTML-escape using a temporary text node (avoids regex edge cases).
 function _diagEsc(s) {
     const d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
 }
 
-// Scroll a tab body to the bottom so the newest entry is visible.
 function _diagScrollToBottom(tab) {
     const body = document.getElementById('diag-body-' + tab);
     if (body) body.scrollTop = body.scrollHeight;
 }
 
-// ── Public panel controls ──────────────────────────────────────────────
+//  Public panel controls 
 
-// Open or close the diagnostics slide-up panel.
 function toggleDiagPanel() {
     const panel = document.getElementById('diag-panel');
     if (!panel) return;
@@ -201,7 +191,6 @@ function toggleDiagPanel() {
     }
 }
 
-// Switch between the Console and Network tabs inside the panel.
 function switchDiagTab(tab) {
     _diagStore.activeTab = tab;
     document.querySelectorAll('.diag-tab').forEach(t => {
@@ -212,12 +201,11 @@ function switchDiagTab(tab) {
     _diagRebuildActiveTab();
 }
 
-// Re-render all entries for the currently active tab from the in-memory store.
 function _diagRebuildActiveTab() {
     const tab = _diagStore.activeTab;
     const body = document.getElementById('diag-body-' + tab);
     if (!body) return;
-    // Remove rendered entries but keep the empty placeholder
+    // Keep the empty-state placeholder; remove only rendered entries.
     const entries = body.querySelectorAll('.diag-entry');
     entries.forEach(e => e.remove());
 
@@ -230,7 +218,6 @@ function _diagRebuildActiveTab() {
     _diagScrollToBottom(tab);
 }
 
-// Wipe all console and network log entries and reset the UI.
 function clearDiagLogs() {
     _diagStore.consoleLogs = [];
     _diagStore.networkLogs = [];
@@ -240,7 +227,7 @@ function clearDiagLogs() {
     _diagRebuildActiveTab();
 }
 
-// Download a JSON file containing all captured console and network logs.
+// Download a JSON file of all captured console and network logs.
 function exportDiagLogs() {
     const data = {
         exported: new Date().toISOString(),
@@ -261,9 +248,8 @@ function exportDiagLogs() {
     URL.revokeObjectURL(a.href);
 }
 
-// ── Resize handle ──────────────────────────────────────────────────────
-
-// Allow the user to drag the top edge of the panel to resize it vertically.
+//  Resize handle 
+// Drag the top edge of the panel to resize it vertically.
 (function initDiagResize() {
     document.addEventListener('DOMContentLoaded', function() {
         const handle = document.getElementById('diag-resize');
@@ -288,9 +274,9 @@ function exportDiagLogs() {
     });
 })();
 
-// ── Global error hooks ─────────────────────────────────────────────────
+//  Global error hooks ─
 
-// Recursion guard 
+// Recursion guard so logging an error inside diagLog itself doesn't loop forever.
 let _diagSelfLogging = false;
 function _diagSafeLog(severity, source, message, detail) {
     if (_diagSelfLogging) return;
@@ -299,9 +285,9 @@ function _diagSafeLog(severity, source, message, detail) {
     finally { _diagSelfLogging = false; }
 }
 
-// (1) Capture-phase window 'error'
+// Capture-phase window 'error' — also catches resource-load failures.
 window.addEventListener('error', function(event) {
-    // Resource-load errors have a target that is an element, no event.error.
+    // Resource-load errors have an element target and no event.error.
     const tgt = event.target;
     if (tgt && tgt !== window && (tgt.tagName === 'LINK' || tgt.tagName === 'SCRIPT' ||
                                   tgt.tagName === 'IMG' || tgt.tagName === 'SOURCE')) {
@@ -315,9 +301,8 @@ window.addEventListener('error', function(event) {
         stack: event.error ? event.error.stack : null,
         raw: event.filename ? event.filename + ':' + event.lineno + ':' + event.colno : null
     });
-}, true);  // <-- capture phase so resource errors are visible
+}, true);  // capture phase so resource errors are visible
 
-// Unhandled promise rejections.
 window.addEventListener('unhandledrejection', function(event) {
     const msg = event.reason instanceof Error ? event.reason.message : String(event.reason);
     _diagSafeLog('error', 'Promise', 'Unhandled rejection: ' + msg, {
@@ -325,7 +310,7 @@ window.addEventListener('unhandledrejection', function(event) {
     });
 });
 
-// (2) Intercept console.error and console.warn
+// Mirror console.error / console.warn into the diagnostics panel.
 (function patchConsole() {
     const orig = {
         error: console.error.bind(console),
@@ -354,7 +339,7 @@ window.addEventListener('unhandledrejection', function(event) {
     };
 })();
 
-// (3) Wrap window.fetch to auto-log FAILURES 
+// Wrap window.fetch to auto-log failures into the Network tab.
 (function patchFetch() {
     const origFetch = window.fetch;
     if (!origFetch) return;
@@ -372,7 +357,7 @@ window.addEventListener('unhandledrejection', function(event) {
             return resp;
         }, function (err) {
             const dur = Math.round(((performance && performance.now) ? performance.now() : Date.now()) - t0);
-            // AbortError means a deliberate abort OR a timeout via AbortController.
+            // AbortError = deliberate abort or AbortController timeout.
             const isAbort = err && (err.name === 'AbortError');
             const status = isAbort ? 'TIMEOUT' : 'ERR';
             diagLogNetwork(method, url, status, dur, err && err.message ? err.message : String(err));
@@ -381,7 +366,7 @@ window.addEventListener('unhandledrejection', function(event) {
     };
 })();
 
-// (4) Wrap setTimeout / setInterval
+// Wrap setTimeout / setInterval so callback exceptions surface in diagnostics.
 (function patchTimers() {
     const origST = window.setTimeout;
     const origSI = window.setInterval;

@@ -1,0 +1,55 @@
+# Timeout failures — the test or page took longer than its allowed wait.
+# Often a slow environment or flaky page-load, not a real product bug.
+# See HOW-TO-ADD-A-RULE.md for the rule schema.
+
+rules:
+  - name: "selenium_wait_timeout"
+    priority: 18
+    domain: "Timeout"
+    subcategory: "WebDriver Wait Timeout"
+    impact: "Test Issue"
+    label: "Wait Timeout"
+    patterns:
+      - "org\\.openqa\\.selenium\\.TimeoutException"
+      - "Expected condition failed: waiting for"
+      - "Timed out after \\d+ seconds waiting for"
+    action: "Explicit wait expired. Page or element took longer than expected — check app performance and wait duration."
+    scope: "global"
+
+  - name: "awaitility_condition_timeout"
+    priority: 19
+    domain: "Timeout"
+    subcategory: "Awaitility Condition Timeout"
+    impact: "Product Regression Likely"
+    label: "Awaitility Timeout"
+    patterns:
+      - "org\\.awaitility\\.core\\.ConditionTimeoutException"
+      - "Lambda expression .* expected the predicate to return"
+      - "expected not null but was <null> within \\d+ seconds"
+    action: "An Awaitility wait expired before the backend returned the expected response. Check the downstream service (ARD / test harness) for slowness or a regression in the response shape."
+    scope: "global"
+
+  - name: "page_load_timeout"
+    priority: 20
+    domain: "Timeout"
+    subcategory: "Page Load Timeout"
+    impact: "Infrastructure Likely"
+    label: "Page Load Timeout"
+    patterns:
+      - "page load timed out"
+      - "Navigation timeout"
+      - "Timeout loading page"
+    action: "Page didn't finish loading. Check app/server response time and network."
+    scope: "global"
+
+  - name: "serenity_step_timeout"
+    priority: 22
+    domain: "Timeout"
+    subcategory: "Serenity Step Timeout"
+    impact: "Test Issue"
+    label: "Step Timeout"
+    patterns:
+      - "serenity\\.step\\.timeout"
+      - "Step timed out after"
+    action: "Serenity step exceeded its time budget. Tune step or app performance."
+    scope: "global"

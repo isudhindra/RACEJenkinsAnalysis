@@ -1,0 +1,29 @@
+# Build failures
+
+rules:
+  - name: "maven_dependency"
+    priority: 72
+    domain: "Build / Configuration"
+    subcategory: "Dependency Resolution"
+    impact: "Test Issue"
+    label: "Dependency Failure"
+    patterns:
+      - "Could not resolve dependencies"
+      - "Failed to read artifact descriptor"
+      - "Non-resolvable parent POM"
+    action: "Maven can't resolve a dependency. Check Nexus/Artifactory access and pom versions."
+    scope: "global"
+
+  - name: "surefire_no_tests"
+    priority: 74
+    domain: "Build / Configuration"
+    subcategory: "No Tests Ran"
+    impact: "Test Issue"
+    label: "No Tests Executed"
+    patterns:
+      - "No tests were executed"
+      - "There are no tests to run"
+      - "No tests found matching"
+      - "No tests found for given includes"
+    action: "Suite ran with zero tests. Check Cucumber tag filters and test path config."
+    scope: "global"

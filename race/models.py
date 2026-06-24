@@ -1,5 +1,6 @@
-"""
-Data models and enumerations for the Jenkins Failure Analysis Tool.
+"""Dataclasses and enums describing a Jenkins job's state — JobRecord, BuildInfo,
+TestMetrics, plus the BuildStatus, HealthState, and ReleaseStatus enums.
+Serialised via to_dict() for the SSE wire and the dashboard JSON.
 """
 
 from dataclasses import dataclass, field
@@ -7,10 +8,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-
-# ============================================================================
-# ENUMERATIONS
-# ============================================================================
 
 class BuildStatus(str, Enum):
     """Status of a Jenkins build."""
@@ -50,13 +47,15 @@ class SSEEventType(str, Enum):
 
 
 class StageCompletion(str, Enum):
-    """Data completion stages."""
+    """Per-job completion stage carried on JOB_METADATA / JOB_ENRICHED events.
+    Distinct from the lowercase stage_1 / stage_2 on progress events.
+    """
     STAGE_1 = "STAGE_1"
     STAGE_2 = "STAGE_2"
 
 
 class DataCompleteness(str, Enum):
-    """Level of data completeness for a job record."""
+    """How fully populated a job record is."""
     COMPLETE = "COMPLETE"
     PARTIAL = "PARTIAL"
     MINIMAL = "MINIMAL"
@@ -64,24 +63,14 @@ class DataCompleteness(str, Enum):
 
 
 class ReleaseStatus(str, Enum):
-    """
-    Validation status of a job against a release promotion time.
-
-    PASS    — at least one run after promotion_time succeeded. Latched —
-              a later failure does not flip this back.
-    PENDING — promotion_time is set but no run has occurred after it yet.
-    FAIL    — runs occurred after promotion_time and none succeeded.
-    NA      — no promotion_time was provided (release validation disabled).
+    """Validation status of a job against a release-promotion cutoff.
+    PASS is latched — once a post-promotion run succeeds, a later failure doesn't revert it.
     """
     PASS = "PASS"
     PENDING = "PENDING"
     FAIL = "FAIL"
     NA = "NA"
 
-
-# ============================================================================
-# DATACLASSES
-# ============================================================================
 
 @dataclass
 class BuildInfo:
@@ -154,6 +143,8 @@ class ClassificationResult:
     label: str = ""
     secondary_hint: Optional[SecondaryHint] = None
     all_labels: List["AnalysisLabel"] = field(default_factory=list)
+    # Focused "what exactly" detail extracted by a rule's optional
+    evidence_detail: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to a dictionary suitable for JSON serialization."""
@@ -169,6 +160,7 @@ class ClassificationResult:
             "label": self.label,
             "all_labels": [al.to_dict() for al in self.all_labels],
             "secondary_hint": None,
+            "evidence_detail": self.evidence_detail,
         }
         if self.secondary_hint is not None:
             result["secondary_hint"] = {
@@ -190,12 +182,7 @@ class ErrorLogEntry:
 
 @dataclass
 class FailureEvidence:
-    """
-    Aggregated failure evidence extracted from console output.
-
-    Only populated for non-passing jobs (FAILED, UNSTABLE, ABORTED, etc.).
-    Passed jobs will have failure_evidence=None on their JobRecord.
-    """
+    """Failure evidence extracted from console output; populated only for non-passing jobs."""
     error_logs: List[ErrorLogEntry] = field(default_factory=list)
     error_count: int = 0
     failure_context: Optional[str] = None
@@ -239,43 +226,21 @@ class JobRecord:
         self,
         promotion_time: Optional[datetime] = None,
     ) -> "ReleaseStatus":
-        """Derive the release-validation status for this job.
-
-        Single source of truth for the "passed after promotion" rule:
-
-        * No ``promotion_time`` → ``NA`` (release validation disabled).
-        * No build in ``recent_builds`` is newer than ``promotion_time``
-          → ``PENDING`` (the release hasn't been validated yet for this job).
-        * Any post-promotion build succeeded → ``PASS`` (latched — later
-          failures intentionally do not flip this).
-        * Post-promotion builds exist but none succeeded → ``FAIL``.
-
-        Args:
-            promotion_time: Cutoff datetime. Only builds with
-                ``timestamp > promotion_time`` are considered.
-
-        Returns:
-            ReleaseStatus enum value.
+        """Derive release-validation status: any post-promotion SUCCESS latches PASS,
+        no post-promotion runs is PENDING, runs but no success is FAIL.
         """
         if promotion_time is None:
             return ReleaseStatus.NA
 
-        # Build timestamps in this codebase are always naive (constructed via
-        # ``datetime.fromtimestamp(...)`` in jenkins_client).  If a caller
-        # hands us a tz-aware ``promotion_time`` (e.g. from a browser that
-        # sent an ISO-with-Z string), strip the tz so the comparison below
-        # doesn't raise.  Both sides are then interpreted in the same naive
-        # timezone — the caller's responsibility to keep them consistent.
+        # Build timestamps 
         if promotion_time.tzinfo is not None:
-            promotion_time = promotion_time.replace(tzinfo=None)
+            promotion_time = promotion_time.astimezone().replace(tzinfo=None)
 
-        # Pool every build we know about for this job and dedupe by number.
-        # Sources: ``recent_builds`` (last 3) AND the three-run context
-        # (latest / previous / last_passed).  ``last_passed`` is critical —
-        # it may be older than the recent window but still newer than the
-        # promotion cutoff, in which case the job has already passed
-        # validation and must NOT be reported as FAIL.
-        pool: Dict[int, "BuildInfo"] = {}
+        # Pool builds from recent_builds AND three_run_context, deduped
+        # by number. last_passed may be older than the recent window but
+        # still newer than the cutoff — losing it would wrongly flip a
+        # validated job back to FAIL.
+        pool: Dict[int, BuildInfo] = {}
         for b in (self.recent_builds or []):
             pool[b.build_number] = b
         if self.three_run_context:
@@ -296,13 +261,8 @@ class JobRecord:
         self,
         promotion_time: Optional[datetime] = None,
     ) -> Dict[str, Any]:
-        """Convert to a dictionary suitable for JSON serialization.
-
-        Args:
-            promotion_time: Optional release-promotion cutoff. When provided
-                the response includes a ``release_status`` field derived via
-                :meth:`compute_release_status`. The ``current_status`` field
-                continues to reflect the latest build regardless.
+        """Serialise to a JSON-ready dict, including a derived release_status when promotion_time is given.
+        current_status always reflects the latest build.
         """
         result = {
             "job_name": self.job_name,
@@ -374,7 +334,7 @@ class JobRecord:
         else:
             result["failure_evidence"] = None
 
-        # recent_builds: compact list of the last N builds for release validation
+        # Compact list of recent builds — powers the sparkline + release validation.
         if self.recent_builds:
             result["recent_builds"] = [
                 {
@@ -403,6 +363,8 @@ class RuleDefinition:
     action: str
     label: str = ""
     scope: str = "global"
+    # Optional regex with named capture groups
+    extract_pattern: Optional[str] = None
 
 
 @dataclass

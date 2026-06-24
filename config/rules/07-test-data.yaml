@@ -1,0 +1,39 @@
+# Test data problems — records missing, fields empty, or expected
+# fixtures absent. Usually the test setup didn't seed the data correctly,
+# not a product bug.
+
+rules:
+  - name: "reviewable_not_found"
+    priority: 23
+    domain: "Test Data"
+    subcategory: "Reviewable Not Created"
+    impact: "Product Regression Likely"
+    label: "Reviewable Not Found"
+    patterns:
+      - "AssertionError: Reviewable .* not found on application"
+    action: "Expected reviewable wasn't created on the application — likely an upstream check didn't fire. Inspect the check-producer service (photo, sanctions, fingerprint, etc.) for missing or delayed events."
+    scope: "global"
+
+  - name: "test_data_missing"
+    priority: 36
+    domain: "Test Data"
+    subcategory: "Missing Record"
+    impact: "Data Issue"
+    label: "Missing Test Data"
+    patterns:
+      - "(?i)record not found"
+      - "(?i)no data (returned|found)"
+      - "(?i)test data .*(missing|empty|not available)"
+    action: "Required test record is absent. Re-seed test data or verify the data-setup hook ran."
+    scope: "global"
+
+  - name: "test_data_null"
+    priority: 38
+    domain: "Test Data"
+    subcategory: "Null Test Data"
+    impact: "Data Issue"
+    label: "Null Test Data"
+    patterns:
+      - "java\\.lang\\.NullPointerException.*testdata"
+    action: "Test data lookup returned null. Check data provider, fixture, or @Before hook output."
+    scope: "global"

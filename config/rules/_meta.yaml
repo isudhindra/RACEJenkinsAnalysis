@@ -1,0 +1,25 @@
+# Classifier metadata used by every rule file in this folder.
+# Holds two things: fallback labels for jobs no rule matched, and the
+# colour the dashboard chips use for each failure domain.
+# To add a new rule, see HOW-TO-ADD-A-RULE.md in this folder.
+
+fallback_labels:
+  no_console_log:   "No Console Data"
+  no_pattern_match: "Unclassified Failure"
+  success:          "—"
+  in_progress:      "Build Running"
+  aborted:          "Build Aborted"
+
+# Domain → colour mapping for the frontend chip.
+# Keys MUST match the `domain` field on rules in the sibling files.
+domain_colors:
+  "Timeout":                       "yellow"
+  "UI / Locator":                  "teal"
+  "Browser / Session":             "indigo"
+  "API / Backend Service":         "blue"
+  "Environment / Infrastructure":  "orange"
+  "Assertion":                     "rose"
+  "Test Data":                     "amber"
+  "Automation / Framework":        "slate"
+  "Build / Configuration":         "purple"
+  "Unknown":                       "gray"

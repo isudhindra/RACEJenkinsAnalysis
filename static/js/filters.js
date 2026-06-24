@@ -1,12 +1,10 @@
-// Jenkins Dashboard filters module: table sorting, animated header canvas, scroll animations, column resizing, and autocomplete-based log analysis filtering
+// filters.js — Table sort, search/log-analysis/release-status filters, header canvas, column resize.
 'use strict';
 
-// ========== TABLE SORTING ==========
-// Track the current sort column and direction for the job table
+// == TABLE SORTING ==
 let currentSortKey = null;
 let currentSortDir = null; // 'asc' | 'desc' | null
 
-// Extract the sortable value from a job row based on the key and type, handling different data types appropriately
 function getSortValue(row, key, type) {
     const job = appState.jobs.get(row.getAttribute('data-job-id'));
     if (!job) return type === 'number' ? -Infinity : '';
@@ -38,7 +36,7 @@ function getSortValue(row, key, type) {
     }
 }
 
-// Update the sort direction indicators (up/down arrows) on table headers to show which column is currently sorted
+// Update the arrow indicators on column headers to match current sort state.
 function syncSortHeaders() {
     document.querySelectorAll('th[data-sortable]').forEach(th => {
         th.removeAttribute('data-sort-dir');
@@ -55,7 +53,7 @@ function syncSortHeaders() {
     }
 }
 
-// Sort the table rows by a given column and move them in the DOM, keeping detail rows paired with their job rows
+// Reorder rows in the DOM by the current sort, keeping detail rows paired with their job rows.
 function sortAndReorderRows(key, type) {
     const tbody = document.querySelector('#job-table tbody');
     if (!tbody) return;
@@ -63,12 +61,11 @@ function sortAndReorderRows(key, type) {
     const rows = Array.from(tbody.querySelectorAll('tr[data-job-id]:not(.detail-row)'));
 
     if (!currentSortDir) {
-        // No active sort, restore insertion order
+        // No active sort — restore original insertion order.
         rows.sort((a, b) =>
             (parseInt(a.dataset.insertionOrder) || 0) - (parseInt(b.dataset.insertionOrder) || 0)
         );
     } else {
-        // Apply sort in the current direction
         const dir = currentSortDir === 'asc' ? 1 : -1;
         rows.sort((a, b) => {
             const va = getSortValue(a, key, type);
@@ -78,12 +75,11 @@ function sortAndReorderRows(key, type) {
         });
     }
 
-    // Pre-collect detail rows into a Map for O(1) lookup
+    // Map of detail rows for O(1) lookup as we re-insert paired pairs.
     const detailMap = new Map();
     tbody.querySelectorAll('tr.detail-row').forEach(dr => {
         detailMap.set(dr.getAttribute('data-job-id'), dr);
     });
-    // Reinsert rows in sorted order, keeping detail rows below their job rows
     rows.forEach(row => {
         tbody.appendChild(row);
         const detailRow = detailMap.get(row.getAttribute('data-job-id') + '_detail');
@@ -91,7 +87,7 @@ function sortAndReorderRows(key, type) {
     });
 }
 
-// Toggle the sort direction when a header is clicked: no sort → descending → ascending → no sort
+// Header-click cycle: no sort → desc → asc → no sort.
 function sortTable(key, type) {
     if (currentSortKey === key) {
         if (currentSortDir === 'desc') currentSortDir = 'asc';
@@ -106,29 +102,27 @@ function sortTable(key, type) {
     sortAndReorderRows(key, type);
 }
 
-// ========== HEADER CANVAS ANIMATION — Signal Flow System ==========
-// Create an animated network visualization in the header using canvas with particles and wave patterns
+// == HEADER CANVAS ANIMATION ==
+// Decorative signal-flow animation in the header banner. Respects prefers-reduced-motion.
 (function initHeaderCanvas() {
     const canvas = document.getElementById('header-canvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Respect user's motion preference and hide animation if reduced motion is requested
     const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReduced) { canvas.style.display = 'none'; return; }
 
     let W, H, dpr, rafId = null, time = 0;
 
-    // Particle pools for different animation elements
-    let hStrings = [];   // Horizontal signal strings
-    let vStrings = [];   // Vertical cascade strings
-    let arcStrings = []; // Arc connector strings
-    let nodes = [];      // Network junction nodes
-    let pulses = [];     // Fast energy pulses
-    let waveBands = [];  // Slow ambient wave bands
+    // Particle pools.
+    let hStrings = [];   // Horizontal signal strings.
+    let vStrings = [];   // Vertical cascade strings.
+    let arcStrings = []; // Arc connectors with travelling dots.
+    let nodes = [];      // Network junction nodes.
+    let pulses = [];     // Fast energy pulses.
+    let waveBands = [];  // Slow ambient wave bands.
 
-    // Resize the canvas when the window or parent container changes size
     function resize() {
         const rect = canvas.parentElement.getBoundingClientRect();
         dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -139,7 +133,6 @@ function sortTable(key, type) {
         initAll();
     }
 
-    // Create a horizontal signal string: a wavy line that moves left or right across the canvas
     function mkHString(forceLeft) {
         const yBase = 4 + Math.random() * (H - 8);
         const goRight = forceLeft !== undefined ? forceLeft : Math.random() > 0.25;
@@ -160,7 +153,6 @@ function sortTable(key, type) {
         };
     }
 
-    // Create a vertical cascade string: a wavy line that moves up or down through the canvas
     function mkVString() {
         const xBase = 20 + Math.random() * (W - 40);
         const goDown = Math.random() > 0.4;
@@ -178,7 +170,6 @@ function sortTable(key, type) {
         };
     }
 
-    // Create an arc connector: a curved path with a travelling dot that represents data flow
     function mkArcString() {
         const fromSide = Math.random() > 0.5;
         const x1 = fromSide ? (Math.random() * W * 0.3) : (W * 0.7 + Math.random() * W * 0.3);
@@ -200,7 +191,6 @@ function sortTable(key, type) {
         };
     }
 
-    // Create a network node: a small pulsing dot that connects to nearby nodes
     function mkNode() {
         return {
             x: 30 + Math.random() * (W - 60),
@@ -213,7 +203,6 @@ function sortTable(key, type) {
         };
     }
 
-    // Create an energy pulse: a bright moving orb that travels horizontally
     function mkPulse() {
         const goRight = Math.random() > 0.3;
         const yB = 6 + Math.random() * (H - 12);
@@ -229,7 +218,6 @@ function sortTable(key, type) {
         };
     }
 
-    // Create a wave band: slow, undulating bands in the background
     function mkWaveBand() {
         return {
             yBase: Math.random() * H,
@@ -243,7 +231,6 @@ function sortTable(key, type) {
         };
     }
 
-    // Initialize all particle pools with appropriate counts based on canvas size
     function initAll() {
         const hCount = Math.max(10, Math.floor(W / 80));
         const vCount = Math.max(3, Math.floor(W / 300));
@@ -261,12 +248,11 @@ function sortTable(key, type) {
         for (let i = 0; i < waveCount; i++) waveBands.push(mkWaveBand());
     }
 
-    // Draw all animation layers to create the final composite visualization
     function draw() {
         ctx.clearRect(0, 0, W, H);
         time++;
 
-        // Layer 0: Ambient wave bands (background)
+        // Layer 0: ambient wave bands.
         for (const wb of waveBands) {
             ctx.beginPath();
             ctx.lineWidth = wb.lw;
@@ -279,7 +265,7 @@ function sortTable(key, type) {
             ctx.stroke();
         }
 
-        // Layer 1: Node connection mesh (draw lines between nearby nodes)
+        // Layer 1: node connection mesh.
         for (let i = 0; i < nodes.length; i++) {
             for (let j = i + 1; j < nodes.length; j++) {
                 const dx = nodes[i].x - nodes[j].x;
@@ -297,7 +283,7 @@ function sortTable(key, type) {
             }
         }
 
-        // Layer 2: Horizontal signal strings (wavy lines moving left or right)
+        // Layer 2: horizontal signal strings.
         for (let i = hStrings.length - 1; i >= 0; i--) {
             const s = hStrings[i];
             s.x += s.speed;
@@ -305,7 +291,6 @@ function sortTable(key, type) {
             const headX = s.speed > 0 ? s.x + s.len : s.x;
             const tailX = s.speed > 0 ? s.x : s.x + s.len;
 
-            // Recycle the string when it goes off-screen
             if ((s.speed > 0 && tailX > W + 30) || (s.speed < 0 && headX < -30)) {
                 hStrings[i] = mkHString(s.speed > 0);
                 continue;
@@ -317,7 +302,6 @@ function sortTable(key, type) {
             ctx.lineWidth = s.lw;
             ctx.lineCap = 'round';
 
-            // Build path with sine wave
             const drawStart = Math.max(0, Math.min(tailX, headX));
             const drawEnd = Math.min(W, Math.max(tailX, headX));
             if (drawEnd > drawStart) {
@@ -328,7 +312,6 @@ function sortTable(key, type) {
                     if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
                 }
 
-                // Fade gradient along trail length
                 const grd = ctx.createLinearGradient(
                     s.speed > 0 ? drawStart : drawEnd, 0,
                     s.speed > 0 ? drawEnd : drawStart, 0
@@ -341,7 +324,6 @@ function sortTable(key, type) {
             }
             ctx.restore();
 
-            // Draw bright head dot at the leading edge of the string
             const hx = Math.max(0, Math.min(W, headX));
             const hy = s.yBase + Math.sin(hx * s.freq + s.phase + time * 0.007) * s.amp;
             if (hx > 0 && hx < W) {
@@ -355,7 +337,7 @@ function sortTable(key, type) {
             }
         }
 
-        // Layer 3: Vertical cascade strings (wavy lines moving up or down)
+        // Layer 3: vertical cascade strings.
         for (let i = vStrings.length - 1; i >= 0; i--) {
             const v = vStrings[i];
             v.y += v.speed;
@@ -363,7 +345,6 @@ function sortTable(key, type) {
             const headY = v.speed > 0 ? v.y + v.len : v.y;
             const tailY = v.speed > 0 ? v.y : v.y + v.len;
 
-            // Recycle the string when it goes off-screen
             if ((v.speed > 0 && tailY > H + 10) || (v.speed < 0 && headY < -10)) {
                 vStrings[i] = mkVString();
                 continue;
@@ -386,7 +367,6 @@ function sortTable(key, type) {
                 ctx.stroke();
             }
 
-            // Draw small head glow at the leading edge
             const chy = Math.max(0, Math.min(H, headY));
             const chx = v.xBase + Math.sin(chy * v.freq + v.phase + time * 0.006) * v.amp;
             if (chy > 0 && chy < H) {
@@ -397,18 +377,16 @@ function sortTable(key, type) {
             }
         }
 
-        // Layer 4: Arc connector strings (curved paths with travelling dots)
+        // Layer 4: arc connectors with travelling dots.
         for (let i = arcStrings.length - 1; i >= 0; i--) {
             const a = arcStrings[i];
             a.progress += a.speed;
 
-            // Recycle the arc when its animation completes
             if (a.progress > 1.3) {
                 arcStrings[i] = mkArcString();
                 continue;
             }
 
-            // Draw the full arc path faintly
             ctx.beginPath();
             ctx.moveTo(a.x1, a.y1);
             ctx.quadraticCurveTo(a.cpx, a.cpy, a.x2, a.y2);
@@ -416,7 +394,6 @@ function sortTable(key, type) {
             ctx.lineWidth = a.lw;
             ctx.stroke();
 
-            // Draw travelling dot along the arc
             if (a.progress >= 0 && a.progress <= 1) {
                 const t = a.progress;
                 const mt = 1 - t;
@@ -436,7 +413,7 @@ function sortTable(key, type) {
             }
         }
 
-        // Layer 5: Network nodes (pulsing dots with optional halos)
+        // Layer 5: pulsing network nodes.
         for (const n of nodes) {
             const pulse = Math.sin(time * n.pulseSpd + n.pulseOff);
             const a = n.baseA + pulse * 0.1;
@@ -453,19 +430,17 @@ function sortTable(key, type) {
             }
         }
 
-        // Layer 6: Energy pulses (bright moving orbs with halos and trails)
+        // Layer 6: bright energy pulses.
         for (let i = pulses.length - 1; i >= 0; i--) {
             const p = pulses[i];
             p.x += p.speed;
             p.y = p.yBase + Math.sin(p.x * p.freq + time * 0.01) * p.amp;
 
-            // Remove pulse when it goes off-screen
             if ((p.speed > 0 && p.x > W + 20) || (p.speed < 0 && p.x < -20)) {
                 pulses.splice(i, 1);
                 continue;
             }
 
-            // Outer halo
             const gr = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 5);
             gr.addColorStop(0, 'hsla(' + p.hue + ', 85%, 80%, ' + p.alpha + ')');
             gr.addColorStop(0.35, 'hsla(' + p.hue + ', 80%, 70%, ' + (p.alpha * 0.25) + ')');
@@ -475,13 +450,11 @@ function sortTable(key, type) {
             ctx.arc(p.x, p.y, p.r * 5, 0, Math.PI * 2);
             ctx.fill();
 
-            // Bright core
             ctx.beginPath();
             ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
             ctx.fillStyle = 'hsla(' + p.hue + ', 92%, 88%, ' + Math.min(1, p.alpha * 1.4) + ')';
             ctx.fill();
 
-            // Tiny motion trail
             ctx.beginPath();
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(p.x - p.speed * 8, p.y);
@@ -491,26 +464,24 @@ function sortTable(key, type) {
             ctx.stroke();
         }
 
-        // Spawn energy pulses periodically to keep a steady flow
+        // Spawn pulses periodically to keep a steady flow.
         if (time % 120 === 0 && pulses.length < 4) pulses.push(mkPulse());
         if (time % 200 === 100 && pulses.length < 4) pulses.push(mkPulse());
 
-        // Continue animation loop
         rafId = requestAnimationFrame(draw);
     }
 
-    // Initialize and start the animation
     resize();
     draw();
 
-    // Handle window resize events with debouncing to avoid excessive redraws
+    // Debounce resize so we don't redraw on every pixel change.
     let resizeTimer;
     window.addEventListener('resize', function() {
         clearTimeout(resizeTimer);
         resizeTimer = setTimeout(resize, 200);
     });
 
-    // Pause animation when page is hidden, resume when visible (energy saving)
+    // Pause the animation while the tab is hidden (battery / CPU).
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
@@ -520,17 +491,15 @@ function sortTable(key, type) {
     });
 })();
 
-// ========== SCROLL-TRIGGERED ANIMATIONS ==========
-// Cache for the row intersection observer used for scroll reveal animations
+// == SCROLL-TRIGGERED ANIMATIONS ==
 let _scrollRowObserver = null;
 
-// Initialize scroll animations: thead shadow and row viewport-triggered reveals
+// Thead shadow on scroll, plus row scroll-reveal via IntersectionObserver.
 function initScrollAnimations() {
     const tableContainer = document.querySelector('.table-container');
     const thead = document.querySelector('#job-table thead');
     if (!tableContainer || !thead) return;
 
-    // Add shadow to table header when content is scrolled down
     tableContainer.addEventListener('scroll', function() {
         if (tableContainer.scrollTop > 4) {
             thead.classList.add('thead-scrolled');
@@ -539,7 +508,6 @@ function initScrollAnimations() {
         }
     }, { passive: true });
 
-    // Use IntersectionObserver to reveal rows as they enter the viewport
     if ('IntersectionObserver' in window) {
         _scrollRowObserver = new IntersectionObserver(function(entries) {
             entries.forEach(function(entry) {
@@ -563,8 +531,8 @@ function observeRowForScroll(_row) {
     return;
 }
 
-// ========== COLUMN RESIZING ==========
-// Allow users to resize table columns by dragging the right edge of headers
+// == COLUMN RESIZING ==
+// Drag the right edge of any resizable header to resize the column.
 function initColumnResizing() {
     document.querySelectorAll('th[data-resizable]').forEach(th => {
         const handle = document.createElement('div');
@@ -582,12 +550,10 @@ function initColumnResizing() {
             startWidth = th.offsetWidth;
             handle.classList.add('active');
 
-            // Track mouse movement to update column width
             function onMouseMove(e) {
                 const newWidth = Math.min(maxW, Math.max(minW, startWidth + (e.pageX - startX)));
                 th.style.width = newWidth + 'px';
             }
-            // Release drag and clean up event listeners
             function onMouseUp() {
                 handle.classList.remove('active');
                 document.removeEventListener('mousemove', onMouseMove);
@@ -599,12 +565,11 @@ function initColumnResizing() {
     });
 }
 
-// Set up table interactivity when the page loads
+// Wire table interactivity once the DOM is ready.
 document.addEventListener('DOMContentLoaded', function() {
-    // Wire sort handlers on clickable headers and initialize column resizing
     document.querySelectorAll('th[data-sortable]').forEach(th => {
         th.addEventListener('click', function(e) {
-            // Don't sort when clicking the resize handle
+            // Clicks on the resize handle shouldn't trigger a sort.
             if (e.target.classList.contains('col-resize-handle')) return;
             sortTable(this.dataset.sortKey, this.dataset.sortType);
         });
@@ -612,7 +577,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initColumnResizing();
     initScrollAnimations();
 
-    // Track manual promotion date/time changes to mark the state as pending
+    // Mark the promotion state pending when the user edits the datetime input.
     const promoInput = document.getElementById('promotion-datetime');
     if (promoInput) {
         promoInput.addEventListener('change', markPromoPending);
@@ -620,15 +585,21 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// Debounce search input to avoid too many filter recalculations (F4 keystroke filtering)
+// Debounce typed search at 80ms so it feels live, but apply an EMPTY input instantly
+// so clearing the box restores the full table without lag.
 let _searchDebounce = null;
 function debouncedApplyFilters() {
     clearTimeout(_searchDebounce);
-    _searchDebounce = setTimeout(() => applyFilters(), 200);
+    const searchEl = document.getElementById('filter-search');
+    if (searchEl && searchEl.value === '') {
+        applyFilters();
+        return;
+    }
+    _searchDebounce = setTimeout(() => applyFilters(), 80);
 }
 
-// ========== LOG ANALYSIS FILTER — searchable autocomplete ==========
-// Build a list of unique log analysis labels with counts from the job dataset
+// == LOG ANALYSIS FILTER — searchable autocomplete ==
+// Unique labels across the loaded jobs, sorted by frequency desc.
 function collectLogAnalysisLabels() {
     var labelMap = {};
     appState.jobs.forEach(function(job) {
@@ -650,15 +621,14 @@ function collectLogAnalysisLabels() {
     return Object.values(labelMap).sort(function(a, b) { return b.count - a.count; });
 }
 
-// Cache of current log analysis labels, rebuilt when the dataset changes
+// Label cache; rebuilt whenever the dataset changes.
 var _laLabelCache = [];
 
-// Rebuild the label cache from the current job dataset
 function rebuildLogAnalysisLabelCache() {
     _laLabelCache = collectLogAnalysisLabels();
 }
 
-// Show the log analysis filter control in the UI (called when entering Detail mode)
+// Reveal the log-analysis filter (Detail mode only).
 function showLogAnalysisFilter() {
     var wrap = document.getElementById('la-filter-wrap');
     if (wrap) {
@@ -667,7 +637,7 @@ function showLogAnalysisFilter() {
     }
 }
 
-// Hide and clear the log analysis filter (called when leaving Detail mode)
+// Hide and clear the log-analysis filter (Detail → Summary switch).
 function hideLogAnalysisFilter() {
     var wrap = document.getElementById('la-filter-wrap');
     if (wrap) wrap.style.display = 'none';
@@ -678,7 +648,7 @@ function hideLogAnalysisFilter() {
     }
 }
 
-// Clear ALL log analysis labels from the filter (multi-select).
+// Clear every selected log-analysis label (multi-select).
 function clearLogAnalysisFilter() {
     var input = document.getElementById('la-filter-input');
     var clearBtn = document.getElementById('la-filter-clear');
@@ -711,7 +681,7 @@ function updateSelectedLabelBadge() {
     if (input) input.classList.add('la-has-value');
 }
 
-// Open the log analysis dropdown and populate it with labels matching the query
+// Open the autocomplete dropdown filtered by `query`.
 function openLogAnalysisDropdown(query) {
     var dropdown = document.getElementById('la-dropdown');
     if (!dropdown) return;
@@ -723,12 +693,11 @@ function openLogAnalysisDropdown(query) {
     if (matches.length === 0) {
         dropdown.innerHTML = '<div class="la-dropdown-empty">No matching labels</div>';
     } else {
-        // Build dropdown items with highlighted search matches.
+        // Build items, highlighting the matched substring inside each label.
         var selected = appState.filters.logAnalysisLabels || [];
         dropdown.innerHTML = matches.map(function(item, idx) {
             var hex = _dotHexMap[item.color] || '#94A3B8';
             var display = escapeHtml(item.label);
-            // Highlight the matching substring if there's a query
             if (q.length > 0) {
                 var lowerDisplay = item.label.toLowerCase();
                 var matchIdx = lowerDisplay.indexOf(q);
@@ -755,7 +724,6 @@ function openLogAnalysisDropdown(query) {
     _laVisibleItems = matches;
 }
 
-// Close the dropdown and clear the keyboard navigation state
 function closeLogAnalysisDropdown() {
     var dropdown = document.getElementById('la-dropdown');
     if (dropdown) dropdown.classList.remove('la-dropdown-open');
@@ -763,7 +731,7 @@ function closeLogAnalysisDropdown() {
     _laVisibleItems = [];
 }
 
-// Toggle a label in the multi-select filter.
+// Toggle one label in/out of the multi-select filter.
 function selectLogAnalysisLabel(label) {
     var input = document.getElementById('la-filter-input');
     var clearBtn = document.getElementById('la-filter-clear');
@@ -776,8 +744,7 @@ function selectLogAnalysisLabel(label) {
     }
     appState.filters.logAnalysisLabels = labels;
 
-    // Clear any typed search so the dropdown re-renders showing all
-    // labels (the user is in "pick several" mode now).
+    // Clear any typed search so the dropdown shows all labels — the user is in "pick several" mode now.
     if (input) {
         input.value = '';
         input.classList.toggle('la-has-value', labels.length > 0);
@@ -785,16 +752,15 @@ function selectLogAnalysisLabel(label) {
     if (clearBtn) clearBtn.style.display = labels.length > 0 ? 'flex' : 'none';
 
     updateSelectedLabelBadge();
-    // Re-open the dropdown so the user sees the updated check marks
+    // Re-open so the user sees the updated check marks.
     openLogAnalysisDropdown('');
     applyFilters();
 }
 
-// Keyboard navigation state for the log analysis dropdown
+// Keyboard navigation state for the dropdown.
 var _laActiveIndex = -1;
 var _laVisibleItems = [];
 
-// Initialize log analysis filter autocomplete with keyboard and mouse interactions
 (function initLogAnalysisFilter() {
     document.addEventListener('DOMContentLoaded', function() {
         var input = document.getElementById('la-filter-input');
@@ -802,20 +768,17 @@ var _laVisibleItems = [];
         var dropdown = document.getElementById('la-dropdown');
         if (!input || !dropdown) return;
 
-        // Open dropdown when the input gets focus
         input.addEventListener('focus', function() {
             rebuildLogAnalysisLabelCache();
             openLogAnalysisDropdown(input.value);
         });
 
-        // Update dropdown as the user types.  Typing only filters the
-        // dropdown — it does NOT clear any selected labels.  Use the X
-        // button or click a chip's × to remove labels.
+        // Typing only filters the dropdown — it does NOT clear selected labels.
+        // Removing labels is done via the X button or a chip click.
         input.addEventListener('input', function() {
             openLogAnalysisDropdown(input.value);
         });
 
-        // Handle arrow keys and Enter for dropdown navigation
         input.addEventListener('keydown', function(e) {
             if (!dropdown.classList.contains('la-dropdown-open')) {
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -844,16 +807,15 @@ var _laVisibleItems = [];
             }
         });
 
-        // Select a label when the user clicks a dropdown item
         dropdown.addEventListener('mousedown', function(e) {
-            e.preventDefault(); // prevent input blur
+            e.preventDefault(); // Keep the input focused.
             var item = e.target.closest('.la-dropdown-item');
             if (item) {
                 selectLogAnalysisLabel(item.getAttribute('data-label'));
             }
         });
 
-        // Update keyboard selection when the user hovers over items
+        // Sync the keyboard highlight with mouse hover.
         dropdown.addEventListener('mouseover', function(e) {
             var item = e.target.closest('.la-dropdown-item');
             if (item) {
@@ -864,7 +826,7 @@ var _laVisibleItems = [];
             }
         });
 
-        // Close dropdown when input loses focus
+        // Brief delay on blur so click events on dropdown items still fire.
         input.addEventListener('blur', function() {
             setTimeout(function() { closeLogAnalysisDropdown(); }, 150);
         });
@@ -883,7 +845,6 @@ var _laVisibleItems = [];
     });
 })();
 
-// Update which dropdown item is highlighted during keyboard navigation
 function updateLaActiveItem(items) {
     items.forEach(function(el, idx) {
         if (idx === _laActiveIndex) {
@@ -895,36 +856,116 @@ function updateLaActiveItem(items) {
     });
 }
 
-// Table-overlay helpers
-let _overlayRefCount = 0;
+//  Release-status filter — populated from actual data ─
+// The dropdown only shows buckets that exist in the current dataset, so the
+// user never picks a value that yields an empty table. Canonical order is
+// workflow order (PASS → PENDING → FAIL → NA), with unknown future values
+// appended in insertion order (forward-compat).
+
+const _RELEASE_STATUS_ORDER = ['PASS', 'PENDING', 'FAIL', 'NA'];
+const _RELEASE_STATUS_LABEL = {
+    PASS: 'Pass',
+    PENDING: 'Pending',
+    FAIL: 'Fail',
+    NA: 'Not Applicable',
+};
+let _lastReleaseStatusFingerprint = '';
+
+function populateReleaseStatusFilter() {
+    const sel = document.getElementById('filter-release-status');
+    if (!sel) return;
+
+    const present = new Set();
+    if (window.appState && appState.jobs) {
+        appState.jobs.forEach(job => {
+            const rs = job && job.release_status;
+            if (rs) present.add(rs);
+        });
+    }
+
+    // Skip the rebuild if the set of available release statuses hasn't changed —
+    // stops the dropdown flickering while jobs stream in.
+    const fingerprint = Array.from(present).sort().join('|');
+    if (fingerprint === _lastReleaseStatusFingerprint) return;
+    _lastReleaseStatusFingerprint = fingerprint;
+
+    // Remember the previous pick so we can restore it (or fall back to "All").
+    const prevValue = sel.value;
+
+    sel.innerHTML = '<option value="">All Release Status</option>';
+
+    for (const status of _RELEASE_STATUS_ORDER) {
+        if (!present.has(status)) continue;
+        const opt = document.createElement('option');
+        opt.value = status;
+        opt.textContent = _RELEASE_STATUS_LABEL[status];
+        sel.appendChild(opt);
+    }
+    // Forward-compat: any unrecognised backend values after the canonical list.
+    for (const status of present) {
+        if (_RELEASE_STATUS_ORDER.indexOf(status) !== -1) continue;
+        const opt = document.createElement('option');
+        opt.value = status;
+        opt.textContent = status;
+        sel.appendChild(opt);
+    }
+
+    // Restore prior pick if still valid; otherwise reset to "All" and clear filter state.
+    if (prevValue && present.has(prevValue)) {
+        sel.value = prevValue;
+    } else {
+        sel.value = '';
+        if (window.appState && appState.filters) appState.filters.releaseStatus = null;
+    }
+}
+
+
+//  Clear-filters button — active-count + disabled state
+function updateClearFiltersButton() {
+    if (typeof updateScopeIndicator === 'function') updateScopeIndicator();
+    const btn = document.getElementById('btn-clear-filters');
+    if (!btn) return;
+    const f = (window.appState && appState.filters) || {};
+    let n = 0;
+    if (f.status)                                       n++;
+    if (f.releaseStatus)                                n++;
+    if (f.searchText && f.searchText.trim().length > 0) n++;
+    if (Array.isArray(f.logAnalysisLabels) && f.logAnalysisLabels.length > 0) n++;
+    // Selection counts as one bucket (not N rows) so the badge stays a small integer.
+    if (window.appState && appState.selectedJobs && appState.selectedJobs.size > 0) n++;
+
+    // Hide the button entirely when there's nothing to clear — avoids a
+    // dim orphan pill in the toolbar row.
+    btn.disabled = (n === 0);
+    btn.hidden = (n === 0);
+
+    const badge = document.getElementById('clear-filter-count');
+    if (badge) {
+        if (n > 0) { badge.textContent = String(n); badge.hidden = false; }
+        else       { badge.hidden = true; }
+    }
+}
+
+
+// Filters apply immediately — the previous deferred approach caused a
+// noticeable blank-table flicker. Overlay helpers kept in case a future
+// slow filter needs them.
 function showTableOverlay() {
-    _overlayRefCount++;
     const el = document.getElementById('table-overlay');
     if (el) { el.classList.add('is-visible'); el.setAttribute('aria-hidden', 'false'); }
 }
 function hideTableOverlay() {
-    _overlayRefCount = Math.max(0, _overlayRefCount - 1);
-    if (_overlayRefCount > 0) return;
     const el = document.getElementById('table-overlay');
     if (el) { el.classList.remove('is-visible'); el.setAttribute('aria-hidden', 'true'); }
 }
-// Public-ish wrapper used by other modules
 function withTableLoading(work) {
-    showTableOverlay();
-    requestAnimationFrame(function() {
-        requestAnimationFrame(function() {
-            try { work(); }
-            finally { hideTableOverlay(); }
-        });
-    });
+    work();
 }
 
-// Public entry point
 function applyFilters() {
     withTableLoading(_applyFiltersImpl);
 }
 
-// Synchronous core — original behaviour
 function _applyFiltersImpl() {
     appState.filters.status = document.getElementById('filter-status').value || null;
 
@@ -932,20 +973,32 @@ function _applyFiltersImpl() {
     appState.filters.searchText = rawSearch.toLowerCase();
     appState.filters._searchRe = null;
     if (rawSearch.trim().length > 0) {
-        try {
-            appState.filters._searchRe = new RegExp(rawSearch, 'i');
-        } catch (e) {
-            // Invalid regex — keep _searchRe null; matchesFilters will
-            // fall back to substring on searchText.
-            appState.filters._searchRe = null;
+        // Wildcard-aware search:
+        //   - `*` or `?` in pattern → glob, anchored, case-insensitive
+        //     (e.g. `*-api-*`, `prp1-*-failure`).
+        //   - Otherwise → plain case-insensitive substring (fallback below).
+        // We deliberately don't parse arbitrary regex; users typing `(` or `+`
+        // would otherwise get surprise matches.
+        const trimmed = rawSearch.trim();
+        if (/[*?]/.test(trimmed)) {
+            try {
+                // Escape regex specials except `*` / `?`, then translate the
+                // wildcards. Anchored ^...$ — wildcard semantics are full-name.
+                const escaped = trimmed
+                    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+                    .replace(/\*/g, '.*')
+                    .replace(/\?/g, '.');
+                appState.filters._searchRe = new RegExp('^' + escaped + '$', 'i');
+            } catch (e) {
+                // Should not happen post-escape; fall back to substring search.
+                appState.filters._searchRe = null;
+            }
         }
     }
 
-    // Release Status filter — only meaningful when the column is visible (promotion-active).
-    // When hidden, the input is unreachable so the value is naturally null.
+    // Release Status filter — only meaningful when the column is visible (promotion active).
     var releaseSel = document.getElementById('filter-release-status');
     appState.filters.releaseStatus = (releaseSel && releaseSel.value) ? releaseSel.value : null;
-    // logAnalysisLabels
 
     const rows = Array.from(document.querySelectorAll('tbody tr[data-job-id]:not(.detail-row)'));
     rows.forEach(row => {
@@ -960,18 +1013,16 @@ function _applyFiltersImpl() {
         const visible = matchesFilters(job);
         row.style.display = visible ? '' : 'none';
 
-        // Also hide/show detail rows paired with their job row
         const detailRow = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}_detail"]`);
         if (detailRow) {
             detailRow.style.display = visible ? '' : 'none';
         }
     });
 
-    // Re-apply current sort if one is active
     reapplyCurrentSort();
     updateToolbarActions();
 
-    // Sync the select-all checkbox state with the current visible selection
+    // Keep select-all in sync with the current visible row set.
     const allCheckbox = document.getElementById('select-all-checkbox');
     if (allCheckbox) {
         const visibleCbs = Array.from(document.querySelectorAll(
@@ -981,30 +1032,34 @@ function _applyFiltersImpl() {
     }
 
     updateEmptyState();
+    updateClearFiltersButton();
 }
 
-// Check if a job matches all currently active filters
+// Does the job pass every active filter?
 function matchesFilters(job) {
     if (appState.filters.status && job.latest_status !== appState.filters.status) return false;
 
-    // Release Status filter — backend emits 'PASS' / 'PENDING' / 'FAIL' / 'NA'.
     if (appState.filters.releaseStatus && job.release_status !== appState.filters.releaseStatus) return false;
 
     if (appState.filters.searchText) {
+        // Defensive `|| ''` — a single missing name/url would otherwise throw
+        // and abort the entire filter pass, making search look broken everywhere.
+        const name = (job.name || '').toString();
+        const url  = (job.url  || '').toString();
         const re = appState.filters._searchRe;
         if (re) {
-            // Regex path — test the raw name/url so anchors (^, $) work
-            if (!re.test(job.name) && !re.test(job.url)) return false;
+            // Wildcard regex path — test raw name/url so the ^...$ anchors work.
+            if (!re.test(name) && !re.test(url)) return false;
         } else {
-            // Fallback: pattern didn't compile, treat as case-insensitive substring.
+            // Plain case-insensitive substring fallback.
             const searchText = appState.filters.searchText;
-            if (!job.name.toLowerCase().includes(searchText) && !job.url.toLowerCase().includes(searchText)) {
+            if (!name.toLowerCase().includes(searchText) && !url.toLowerCase().includes(searchText)) {
                 return false;
             }
         }
     }
 
-    // Log Analysis label filter (Detail mode only)
+    // Log Analysis label filter (Detail mode only).
     const selLabels = appState.filters.logAnalysisLabels || [];
     if (selLabels.length > 0) {
         const cls = job.classification;
@@ -1021,7 +1076,7 @@ function matchesFilters(job) {
     return true;
 }
 
-// Re-sort the table without changing the current sort direction (called after filters change)
+// Re-sort the table without flipping direction; called after filter changes.
 function reapplyCurrentSort() {
     if (!currentSortKey || !currentSortDir) return;
     const th = document.querySelector(`th[data-sort-key="${currentSortKey}"]`);
@@ -1029,13 +1084,13 @@ function reapplyCurrentSort() {
     sortAndReorderRows(currentSortKey, type);
 }
 
-// ========== SELECTION & EXPANSION ==========
-// Toggle the selection state of all visible job rows
+// == SELECTION & EXPANSION ==
+// Toggle every currently-visible job row.
 function toggleSelectAll(checked) {
     const checkboxes = document.querySelectorAll('tbody tr[data-job-id]:not(.detail-row) input[type="checkbox"]');
     checkboxes.forEach(cb => {
         const row = cb.closest('tr');
-        // Only affect visible (not filtered-out) rows
+        // Only touch visible (un-filtered) rows.
         if (row.style.display === 'none') return;
         cb.checked = checked;
         const jobId = row.getAttribute('data-job-id');
@@ -1046,9 +1101,10 @@ function toggleSelectAll(checked) {
         }
     });
     updateToolbarActions();
+    updateClearFiltersButton();
 }
 
-// Toggle the selection state of a single job and update the select-all checkbox accordingly
+// Toggle one job and reconcile the select-all checkbox state.
 function toggleJobSelection(jobId) {
     if (appState.selectedJobs.has(jobId)) {
         appState.selectedJobs.delete(jobId);
@@ -1057,26 +1113,25 @@ function toggleJobSelection(jobId) {
     }
 
     const allCheckbox = document.getElementById('select-all-checkbox');
-    // Only consider visible (not filtered-out) rows for "select all" state
+    // "Select all" state considers visible rows only.
     const visibleCheckboxes = Array.from(document.querySelectorAll('tbody tr[data-job-id]:not(.detail-row):not([style*="display: none"]) input[type="checkbox"]'));
     allCheckbox.checked = visibleCheckboxes.length > 0 && visibleCheckboxes.every(cb => cb.checked);
     updateToolbarActions();
+    updateClearFiltersButton();
 }
 
-// Expand or collapse a job's detail row with additional information
+// Expand or collapse a job's detail row.
 function toggleRowExpansion(jobId) {
     const job = appState.jobs.get(jobId);
     if (!job) return;
 
     if (appState.expandedRows.has(jobId)) {
-        // Close the detail row
         appState.expandedRows.delete(jobId);
         const detailRow = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}_detail"]`);
         if (detailRow) detailRow.remove();
         const row = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}"]`);
         if (row) row.classList.remove('expanded');
     } else {
-        // Open the detail row
         appState.expandedRows.add(jobId);
         const row = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}"]`);
         if (row) {

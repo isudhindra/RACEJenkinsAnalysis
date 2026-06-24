@@ -1,8 +1,7 @@
-// Jenkins Dashboard streaming module — handles real-time SSE data fetching,
-// row rendering, enrichment, and progress tracking for job analysis.
+// streaming.js — SSE pipeline: opens the stream, dispatches events, and drives row insertion/enrichment.
 'use strict';
 
-// Update the header status indicator (dot, label, chip) to reflect current operation state
+// Reflect the current operation state in the header status dot/label/chip.
 function updateHeaderStatus(state) {
     const dot = document.getElementById('header-status-dot');
     const label = document.getElementById('header-status-label');
@@ -27,7 +26,7 @@ function updateHeaderStatus(state) {
     }
 }
 
-// Initiate a fetch operation by validating credentials, building the request, and opening an SSE stream
+// Validate credentials, build the SSE request body, and open the stream.
 function triggerFetch() {
     if (appState.activeOperationId) {
         showToast('Fetch already in progress', 'warning');
@@ -42,7 +41,7 @@ function triggerFetch() {
     let body;
 
     if (appState.sourceMode === 'job_list') {
-        // Job list mode — send explicit job names
+        // Job list mode — send explicit job names.
         if (!appState.customJobList || appState.customJobList.jobs.length === 0) {
             showToast('Please select or upload a job list', 'error');
             return;
@@ -58,7 +57,7 @@ function triggerFetch() {
         };
         appState.currentViewUrl = 'job_list:' + appState.customJobList.name;
     } else {
-        // View mode — resolve view_path to full URL via instance base
+        // View mode — resolve view_path → full view_url against the instance base.
         const viewSelect = document.getElementById('cfg-view-select');
         const viewPath = viewSelect.value;
         const resolvedUrl = appState._resolvedViewUrl;
@@ -68,7 +67,6 @@ function triggerFetch() {
             return;
         }
 
-        // Construct deterministic URL from view_path + jenkins_url
         const resolved = resolveViewUrl(viewPath);
         body = {
             source_mode: 'view_url',
@@ -83,26 +81,23 @@ function triggerFetch() {
         appState.currentViewUrl = resolved.viewUrl;
     }
 
-    // Set fetch button to loading state
     const fetchBtn = document.getElementById('btn-fetch');
     fetchBtn.disabled = true;
     fetchBtn.innerHTML = '<span class="cfg-spinner"></span> Fetching...';
     document.getElementById('btn-update').style.display = 'none';
     document.getElementById('btn-refresh-failed').style.display = 'none';
 
-    // Collapse config panel during fetch
     document.getElementById('config-panel').classList.remove('expanded');
 
-    // Complete state reset before loading new dataset
+    // Full state reset before loading the new dataset.
     resetDashboardState();
 
-    // Begin storytelling — first phase is establishing connection
     motionSetPhase('connecting');
 
     initFetchStream(url, body);
 }
 
-// Reset the progress bar to initial state and initialize display elements
+// Reset the progress bar widgets back to a clean "0% / discovering" state.
 function resetProgressBar() {
     const bar = $id('progress-bar');
     bar.classList.remove('completed', 'has-errors');
@@ -124,13 +119,12 @@ function resetProgressBar() {
     $id('progress-stage-icon').className = 'progress-stage-icon';
     appState._fetchErrorCount = 0;
 
-    // Add bottom padding to table-container so rows aren't hidden behind
-    // the floating progress overlay.
+    // Pad the table container so rows aren't hidden behind the floating progress overlay.
     var tc = document.querySelector('.table-container');
     if (tc) tc.classList.add('has-progress-overlay');
 }
 
-// Open an SSE stream to the server and handle incoming job data events in real-time
+// Open an SSE stream and dispatch incoming events.
 async function initFetchStream(url, body) {
     appState.activeOperationId = 'op_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
 
@@ -140,16 +134,14 @@ async function initFetchStream(url, body) {
 
     document.getElementById('config-panel').style.display = 'none';
 
-    // statusTransitions already cleared by resetDashboardState;
-    // fresh fetch has no prior statuses to compare against.
-
-    // Create AbortController so cancelFetch() can abort the request
+    // AbortController is the canonical cancellation channel for cancelFetch().
     const controller = new AbortController();
     appState._fetchAbortController = controller;
 
     try {
         const _sseT0 = performance.now();
-        const response = await fetch(url, {
+        // POST so apiFetch's X-RACE-Token header works — no ?token= fallback needed.
+        const response = await apiFetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -169,18 +161,20 @@ async function initFetchStream(url, body) {
 
         const dispatchSseLine = (line) => {
             if (!line.startsWith('data: ')) return;
+            // AbortController.signal is the canonical cancellation channel.
+            // The operation_id check below is belt-and-braces against a race
+            // where a second fetch started server-side could leak events.
+            if (controller.signal.aborted) return;
             try {
                 const data = JSON.parse(line.substring(6));
-                // Adopt the server's operation ID on first event
+                // Adopt the server's operation ID on the first event we see.
                 if (data.operation_id && appState.activeOperationId && appState.activeOperationId.startsWith('op_')) {
                     appState.activeOperationId = data.operation_id;
                 }
-                if (data.operation_id && data.operation_id !== appState.activeOperationId) {
-                    console.log('Ignoring stale event:', data.operation_id);
+                if (data.operation_id && appState.activeOperationId &&
+                    data.operation_id !== appState.activeOperationId) {
                     return;
                 }
-                // If operation was cancelled (activeOperationId is null), drop all events
-                if (!appState.activeOperationId) return;
 
                 if (data.event_type === 'job_metadata') {
                     handleJobMetadata(data);
@@ -215,19 +209,39 @@ async function initFetchStream(url, body) {
             }
         }
 
-        // Stream ended — flush any final decoder bytes
+        // Flush any final decoder bytes after the stream ends.
         buffer += decoder.decode();
         if (buffer.trim().length > 0) {
-            // Treat each non-empty segment as a candidate event.  Most of the
-            // time there is at most one segment here.
             const tail = buffer.split('\n\n');
             for (const line of tail) {
                 if (line.length > 0) dispatchSseLine(line);
             }
         }
+
+        // Safety net: server closed the stream but never emitted FETCH_COMPLETE
+        if (_rowBatch && _rowBatch.isStreaming) {
+            diagLog('warning', 'SSE', 'Stream ended without FETCH_COMPLETE — running safety-net KPI flush');
+            endStreamingMode();
+            try { updateSummaryBar(); } catch (e) { console.error('safety-net updateSummaryBar:', e); }
+            try {
+                if (appState.promotionTime && typeof updateRegressionKPI === 'function') {
+                    updateRegressionKPI(appState.promotionTime);
+                }
+            } catch (e) { console.error('safety-net updateRegressionKPI:', e); }
+            // Make sure the UI matches an idle dashboard.
+            document.getElementById('progress-bar').classList.remove('visible');
+            document.getElementById('config-panel').style.display = '';
+            const tc = document.querySelector('.table-container');
+            if (tc) tc.classList.remove('has-progress-overlay');
+            appState.activeOperationId = null;
+            appState._fetchAbortController = null;
+            updateHeaderStatus('idle');
+            updateFetchButton();
+            updateEmptyState();
+        }
     } catch (error) {
-        if (error.name === 'AbortError') return; // User cancelled — handled by cancelFetch()
-        endStreamingMode(); // Clean up loading indicators on error
+        if (error.name === 'AbortError') return; // User cancelled — handled by cancelFetch().
+        endStreamingMode();
         reportFetchError('SSE', 'Connection error during fetch', '/api/fetch-jobs (SSE)', error, 'Connection error during fetch: ' + error.message);
         document.getElementById('progress-bar').classList.remove('visible');
         document.getElementById('config-panel').style.display = '';
@@ -241,30 +255,77 @@ async function initFetchStream(url, body) {
     }
 }
 
-// Schedule a debounced filter, sort, and summary update to reduce layout thrashing during SSE events
+// Batches table updates while jobs stream in so we don't re-filter and re-sort
+// on every event. The final pass runs once after the stream ends.
 let _filterSortRaf = null;
 function scheduleFilterSortUpdate() {
     if (_filterSortRaf) return;
+    if (_rowBatch && _rowBatch.isStreaming) return;
     _filterSortRaf = requestAnimationFrame(() => {
         _filterSortRaf = null;
+        // Repopulate the release-status dropdown from the current job set first
+        // — its own fingerprint memoisation keeps this cheap per frame.
+        if (typeof populateReleaseStatusFilter === 'function') populateReleaseStatusFilter();
         applyFilters();
         updateSummaryBar();
     });
 }
 
-// Buffer system for batched DOM insertion of job rows during streaming
+// Buffer for batched DOM insertion of job rows during streaming.
 const _rowBatch = {
-    queue: [],          // Pending { row, needsEnrichment } objects
-    flushRaf: null,     // RAF handle for the flush loop
-    chunkSize: 18,      // Rows to append per animation frame
-    totalExpected: 0,   // From progress events (total_jobs)
-    insertionCounter: 0,// Monotonic counter for insertion order
-    skeletonRows: [],   // Currently displayed skeleton placeholder rows
-    skeletonCount: 4,   // Number of skeleton rows to show
-    isStreaming: false,  // True while SSE stream is active
+    queue: [],          // Pending { row, needsEnrichment } objects.
+    flushRaf: null,     // RAF handle for the flush loop.
+    chunkSize: 18,      // Rows appended per animation frame.
+    totalExpected: 0,   // From progress events (total_jobs).
+    insertionCounter: 0,// Monotonic counter for stable insertion order.
+    skeletonRows: [],   // Currently displayed skeleton placeholders.
+    skeletonCount: 4,
+    isStreaming: false, // True while the SSE stream is active.
+    // Pending timer IDs that strip .row-fresh after the entry animation;
+    // tracked so resetRowBatch() can cancel them and release closure refs
+    // to rows that have been thrown away by a fresh fetch.
+    freshTimers: [],
 };
 
-// Show the inline loading indicator below the table
+// Watchdog timeout for the .row-pending state.
+const PENDING_WATCHDOG_MS = 30 * 1000;
+
+// jobId → setTimeout handle for that row's pending-watchdog. Lets us
+// cancel the watchdog the moment real enrichment arrives, and keeps
+// only one timer per row even across re-enqueues.
+const _pendingWatchdogs = new Map();
+
+// Arm (or re-arm) the pending watchdog for a single job.
+function armPendingWatchdog(jobId) {
+    if (!jobId) return;
+    const existing = _pendingWatchdogs.get(jobId);
+    if (existing) clearTimeout(existing);
+    const handle = setTimeout(() => {
+        _pendingWatchdogs.delete(jobId);
+        const row = getJobRowEl(jobId);
+        if (!row || !row.classList.contains('row-pending')) return;
+        row.classList.remove('row-pending');
+        const cell = row.querySelector('.cell-log-analysis');
+        if (cell) {
+            cell.innerHTML = '<span class="row-enriching-indicator row-enriching-indicator--unavailable" '
+                           + 'title="No classification arrived within ' + (PENDING_WATCHDOG_MS / 1000)
+                           + 's">Analysis unavailable</span>';
+        }
+    }, PENDING_WATCHDOG_MS);
+    _pendingWatchdogs.set(jobId, handle);
+}
+
+// Cancel and forget the watchdog for a job. Called when enrichment
+// arrives or the row is removed from the table.
+function cancelPendingWatchdog(jobId) {
+    if (!jobId) return;
+    const handle = _pendingWatchdogs.get(jobId);
+    if (handle) {
+        clearTimeout(handle);
+        _pendingWatchdogs.delete(jobId);
+    }
+}
+
 function showTableLoadingIndicator(message) {
     const el = $id('table-loading-indicator');
     if (!el) return;
@@ -274,13 +335,11 @@ function showTableLoadingIndicator(message) {
     updateLoadingCount();
 }
 
-// Hide the inline loading indicator
 function hideTableLoadingIndicator() {
     const el = $id('table-loading-indicator');
     if (el) el.classList.add('hidden');
 }
 
-// Update the row counter in the loading indicator with current load progress
 function updateLoadingCount() {
     const countEl = $id('tli-count');
     if (!countEl) return;
@@ -294,7 +353,7 @@ function updateLoadingCount() {
     }
 }
 
-// Insert skeleton placeholder rows at the bottom of tbody for perceived loading performance
+// Insert skeleton placeholder rows for perceived loading speed.
 function showSkeletonRows() {
     removeSkeletonRows();
     const tbody = document.querySelector('#job-table tbody');
@@ -304,7 +363,6 @@ function showSkeletonRows() {
         const tr = document.createElement('tr');
         tr.className = 'skeleton-row';
         tr.style.opacity = String(1 - i * 0.2);
-        // Build cells matching table column count
         const cells = [];
         for (let c = 0; c < colCount; c++) {
             const widthCls = c === 0 ? 'skel-ws' : c === 1 ? 'skel-w1' : c < 5 ? 'skel-w2' : 'skel-w3';
@@ -316,16 +374,14 @@ function showSkeletonRows() {
     }
 }
 
-// Remove all skeleton placeholder rows from the DOM
 function removeSkeletonRows() {
     _rowBatch.skeletonRows.forEach(tr => { if (tr.parentNode) tr.parentNode.removeChild(tr); });
     _rowBatch.skeletonRows = [];
 }
 
-// Enqueue a rendered row for batched DOM insertion via RAF-based flush cycle
+// Queue a rendered row for batched DOM insertion via the RAF flush cycle.
 function enqueueRow(row, needsEnrichment) {
     _rowBatch.queue.push({ row, needsEnrichment });
-    // Show loading indicator if not already visible
     if (_rowBatch.queue.length === 1) {
         showTableLoadingIndicator('Loading rows...');
         showSkeletonRows();
@@ -333,13 +389,12 @@ function enqueueRow(row, needsEnrichment) {
     scheduleRowFlush();
 }
 
-// Schedule a RAF-based flush of the row queue to batch DOM updates efficiently
 function scheduleRowFlush() {
     if (_rowBatch.flushRaf) return;
     _rowBatch.flushRaf = requestAnimationFrame(flushRowBatch);
 }
 
-// Flush one chunk of rows from the queue into the DOM with controlled performance
+// Append one chunk's worth of rows in a single DocumentFragment per frame.
 function flushRowBatch() {
     _rowBatch.flushRaf = null;
     const tbody = document.querySelector('#job-table tbody');
@@ -348,60 +403,72 @@ function flushRowBatch() {
     const chunk = _rowBatch.queue.splice(0, _rowBatch.chunkSize);
     if (chunk.length === 0) return;
 
-    // Remove skeleton rows before inserting real rows, they'll be re-added if more expected
+    // Remove skeletons before insertion; re-added below if more rows are still expected.
     removeSkeletonRows();
 
-    // Use a DocumentFragment for batched DOM insertion (single reflow)
+    // Single reflow per frame via DocumentFragment.
     const fragment = document.createDocumentFragment();
     chunk.forEach(({ row, needsEnrichment }) => {
         if (needsEnrichment) {
             row.classList.add('row-pending');
             const recCell = row.querySelector('.cell-log-analysis');
             if (recCell) recCell.innerHTML = '<span class="row-enriching-indicator">Analyzing...</span>';
+            armPendingWatchdog(row.getAttribute('data-job-id'));
         }
-        // Cap stagger delay: max 0.7s regardless of row count, then batch offset
+        // Cap stagger at 0.7s so large fetches don't get unbearably long entry delays.
         const staggerBase = Math.min(_rowBatch.insertionCounter * 0.035, 0.7);
         row.style.animationDelay = staggerBase + 's';
         row.dataset.insertionOrder = _rowBatch.insertionCounter++;
+        // .row-fresh gates the entry animation so it plays exactly once on insertion.
+        // Without it the animation re-fires each time a filter toggles display:none.
+        row.classList.add('row-fresh');
         fragment.appendChild(row);
-        // Track row insertion for motion stagger calculations
         motionNoteRowInserted();
     });
     tbody.appendChild(fragment);
 
-    // Observe rows for scroll-reveal (batch — defer to next microtask to avoid layout thrash)
+    // Strip the entry-animation class once it has had time to settle (0.5s anim + 0.7s max stagger).
+    // Track the timer so resetRowBatch() can cancel it if these rows are discarded mid-animation.
+    const animRows = chunk.map(c => c.row);
+    const timerId = setTimeout(() => {
+        for (const r of animRows) {
+            r.classList.remove('row-fresh');
+            r.style.animationDelay = '';
+        }
+        const idx = _rowBatch.freshTimers.indexOf(timerId);
+        if (idx !== -1) _rowBatch.freshTimers.splice(idx, 1);
+    }, 1500);
+    _rowBatch.freshTimers.push(timerId);
+
+    // Defer scroll-reveal observation to the next frame to avoid extra layout work.
     requestAnimationFrame(() => {
         chunk.forEach(({ row }) => observeRowForScroll(row));
     });
 
-    // Update loading counter
     updateLoadingCount();
 
-    // If more rows queued, schedule next flush + show skeletons
     if (_rowBatch.queue.length > 0) {
         showSkeletonRows();
         scheduleRowFlush();
     } else if (_rowBatch.isStreaming) {
-        // Stream still active but queue empty — keep indicator, add skeletons
+        // Queue is empty but more rows are still coming — keep skeletons visible.
         showSkeletonRows();
     } else {
-        // All done
         removeSkeletonRows();
         hideTableLoadingIndicator();
     }
 
-    // Schedule debounced filter/sort/KPI updates
     scheduleFilterSortUpdate();
     updateEmptyState();
 }
 
-// Signal that SSE streaming has started — show loading state and transition UI
+// Enter streaming mode — switch to the table layout and start the narrative.
 function beginStreamingMode() {
     _rowBatch.isStreaming = true;
     _rowBatch.insertionCounter = 0;
     _rowBatch.totalExpected = 0;
 
-    // Immediately transition from empty-state to table layout to show structural presence early
+    // Swap empty-state for the table early so the user sees structure immediately.
     var emptyEl = $id('empty-state');
     if (emptyEl) emptyEl.classList.add('hidden');
     var noResultsEl = $id('no-results-state');
@@ -416,18 +483,15 @@ function beginStreamingMode() {
     showTableLoadingIndicator('Preparing rows...');
     showSkeletonRows();
 
-    // Advance storytelling — stream opened, now discovering jobs
     motionSetPhase('discovering');
 }
 
-// Signal that SSE streaming has ended — flush remaining rows and clean up loading UI
+// Exit streaming mode — flush any queued rows immediately and clean up loading UI.
 function endStreamingMode() {
     _rowBatch.isStreaming = false;
     removeSkeletonRows();
-    // Flush any remaining rows immediately
     if (_rowBatch.queue.length > 0) {
         if (_rowBatch.flushRaf) { cancelAnimationFrame(_rowBatch.flushRaf); _rowBatch.flushRaf = null; }
-        // Flush all remaining at once
         const tbody = document.querySelector('#job-table tbody');
         if (tbody) {
             const fragment = document.createDocumentFragment();
@@ -437,6 +501,7 @@ function endStreamingMode() {
                     row.classList.add('row-pending');
                     const recCell = row.querySelector('.cell-log-analysis');
                     if (recCell) recCell.innerHTML = '<span class="row-enriching-indicator">Analyzing...</span>';
+                    armPendingWatchdog(row.getAttribute('data-job-id'));
                 }
                 row.style.animationDelay = '0s';
                 row.dataset.insertionOrder = _rowBatch.insertionCounter++;
@@ -447,11 +512,21 @@ function endStreamingMode() {
         }
     }
     hideTableLoadingIndicator();
+    // Run the filter/sort pass that was suppressed during streaming so the
+    // final view reflects every enrichment that arrived.
+    scheduleFilterSortUpdate();
 }
 
-// Reset the batch buffer state completely for a fresh fetch cycle
+// Reset the row-batch buffer to a clean slate for a fresh fetch cycle.
 function resetRowBatch() {
     if (_rowBatch.flushRaf) { cancelAnimationFrame(_rowBatch.flushRaf); _rowBatch.flushRaf = null; }
+    // Cancel pending row-fresh cleanup timers so they don't keep closure
+    // refs alive to rows that are being thrown away.
+    for (const t of _rowBatch.freshTimers) clearTimeout(t);
+    _rowBatch.freshTimers = [];
+    // Cancel every pending-enrichment watchdog — those rows are gone.
+    for (const t of _pendingWatchdogs.values()) clearTimeout(t);
+    _pendingWatchdogs.clear();
     _rowBatch.queue = [];
     _rowBatch.insertionCounter = 0;
     _rowBatch.totalExpected = 0;
@@ -460,7 +535,7 @@ function resetRowBatch() {
     hideTableLoadingIndicator();
 }
 
-// Process a job_metadata event: create or update a job record and render its row
+// Handle a job_metadata event: upsert the job record and render or refresh its row.
 function handleJobMetadata(data) {
     const jobId = data.job_url;
     const isRunning = data.is_running === true || data.current_status === 'IN_PROGRESS';
@@ -481,32 +556,36 @@ function handleJobMetadata(data) {
         three_run_context: data.three_run_context || {},
         recent_builds: data.recent_builds || [],
         classification: data.classification || null,
-        failure_evidence: data.failure_evidence || null
+        failure_evidence: data.failure_evidence || null,
+        // Backend computes release_status server-side when promotion_time is supplied.
+        // Stored on the job so the Release-Status filter and selection helpers can
+        // read it directly without recomputing client-side.
+        release_status: data.release_status || null
     };
 
     appState.lastRefreshTimes.set(jobId, new Date());
-    const existingRow = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}"]`);
+    const existingRow = getJobRowEl(jobId);
 
     appState.jobs.set(jobId, job);
 
     if (existingRow) {
-        // Row already exists — update in place (selective refresh case)
+        // Selective refresh path — update in place.
         updateJobRow(jobId, job);
         existingRow.classList.remove('row-pending');
+        cancelPendingWatchdog(jobId);
         scheduleFilterSortUpdate();
     } else {
-        // New row — create element and enqueue for batched insertion
+        // New row — render and enqueue for batched insertion.
         const row = renderJobRow(job);
         const needsEnrichment = !isRunning && ['FAILURE', 'UNSTABLE'].includes(data.current_status);
         enqueueRow(row, needsEnrichment);
     }
 
     updateEmptyState();
-    // Refresh promotion panel if active
     if (appState.promotionTime) updatePromotionPanel(appState.promotionTime);
 }
 
-// Merge enrichment fields from a data payload into an existing job object (shared by SSE and refresh)
+// Merge enrichment fields into an existing job record (shared by SSE + single-job refresh).
 function mergeEnrichmentFields(job, data) {
     if (data.classification)   job.classification = data.classification;
     if (data.three_run_context) job.three_run_context = data.three_run_context;
@@ -514,15 +593,18 @@ function mergeEnrichmentFields(job, data) {
     if (data.data_completeness) job.data_completeness = data.data_completeness;
     if (data.failure_evidence) job.failure_evidence = data.failure_evidence;
     if (data.recent_builds && data.recent_builds.length) job.recent_builds = data.recent_builds;
+    // Backend recomputes release_status whenever promotion_time is set;
+    // accept the latest value so the filter dropdown stays accurate.
+    if (data.release_status) job.release_status = data.release_status;
 }
 
-// Process a job_enriched event: update a job with analysis results and re-render its row
+// Handle a job_enriched event: layer classification + metrics onto an existing row.
 function handleJobEnriched(data) {
     const jobId = data.job_url;
     const job = appState.jobs.get(jobId);
     if (!job) return;
 
-    // Classification has enriched label/hint fields that need specific mapping
+    // Classification carries enriched label/hint fields that need explicit mapping.
     if (data.classification) {
         const c = data.classification;
         job.classification = {
@@ -533,6 +615,7 @@ function handleJobEnriched(data) {
             matched_rule_name: c.matched_rule_name,
             matched_pattern: c.matched_pattern,
             evidence_snippet: c.evidence_snippet,
+            evidence_detail: c.evidence_detail || null,
             action: c.action,
             label: c.label || c.subcategory || '',
             all_labels: c.all_labels || [],
@@ -540,26 +623,26 @@ function handleJobEnriched(data) {
         };
     }
 
-    // Merge remaining enrichment fields
     mergeEnrichmentFields(job, { ...data, classification: null });
 
-    const row = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}"]`);
+    const row = getJobRowEl(jobId);
     if (row) {
         row.classList.remove('row-pending');
+        cancelPendingWatchdog(jobId);
         row.classList.add('row-just-enriched');
         row.style.animationDelay = '0s';
         updateJobRow(jobId, job);
         setTimeout(() => row.classList.remove('row-just-enriched'), 800);
-        // Trigger the motion enrichment pulse animation on this row
         motionEnrichRow(row);
     }
 
     rebuildLogAnalysisLabelCache();
-    applyFilters();
-    updateSummaryBar();
+    // Batched so a burst of enriched jobs only triggers one filter+summary
+    // pass, not one per event.
+    scheduleFilterSortUpdate();
 }
 
-// Process a progress_update event: update progress bar and stage indicators with fetch status
+// Handle a progress_update event: update progress bar, stage dots, and narrative phase.
 function handleProgressUpdate(data) {
     const progressFill = document.getElementById('progress-fill');
     const progressText = document.getElementById('progress-text');
@@ -567,33 +650,28 @@ function handleProgressUpdate(data) {
     const completed = data.completed || 0;
     const pct = Math.round((completed / total) * 100);
 
-    // Feed total into row batch system for progress display
     if (total > 0) _rowBatch.totalExpected = total;
     updateLoadingCount();
 
-    // Update progress bar width
     progressFill.style.width = pct + '%';
-
-    // Update percentage display
     document.getElementById('progress-pct').textContent = pct + '%';
-
-    // Update processed/total counters
     document.getElementById('progress-processed').textContent = completed;
     document.getElementById('progress-total').textContent = total;
 
-    // Stage-specific labels and mini stage dots
     const stageLabel = document.getElementById('progress-stage-label');
     const dot1 = document.getElementById('stage-dot-1');
     const dot2 = document.getElementById('stage-dot-2');
     const dot3 = document.getElementById('stage-dot-3');
 
+    // `data.stage` is the lowercase *pipeline phase* ("stage_1" = metadata fetch,
+    // "stage_2" = enrichment). It is intentionally distinct from the uppercase
+    // StageCompletion enum on individual job records — see race/models.py.
     if (data.stage === 'stage_1') {
         stageLabel.textContent = 'Fetching Build Results & Test Metrics';
         progressText.textContent = `Retrieving metadata for ${completed} of ${total} jobs...`;
         dot1.className = 'stage-dot done';
         dot2.className = 'stage-dot active';
         dot3.className = 'stage-dot';
-        // Advance narrative — now pulling execution data
         motionSetPhase('fetching');
     } else if (data.stage === 'stage_2') {
         stageLabel.textContent = 'Analyzing Failures & Classifying';
@@ -601,15 +679,13 @@ function handleProgressUpdate(data) {
         dot1.className = 'stage-dot done';
         dot2.className = 'stage-dot done';
         dot3.className = 'stage-dot active';
-        // Advance narrative — now classifying failures
         motionSetPhase('classifying');
     }
 
-    // Track error count
     if (!appState._fetchErrorCount) appState._fetchErrorCount = 0;
 }
 
-// Process a job_error event: mark the job as failed and update progress error count
+// Handle a job_error event: mark the row as a fetch failure and bump the progress error counter.
 function handleJobError(data) {
     const jobId = data.job_url;
     const job = appState.jobs.get(jobId);
@@ -617,19 +693,18 @@ function handleJobError(data) {
 
     diagLog('warning', 'SSE', 'Job fetch error: ' + (data.error || 'unknown'), { extra: jobId });
     job.error = data.error;
-    const row = document.querySelector(`tr[data-job-id="${escapeHtml(jobId)}"]`);
+    const row = getJobRowEl(jobId);
     if (row) {
         row.querySelector('.cell-status').innerHTML = `<span class="badge badge-fetch-error" aria-label="Fetch error">Fetch Error</span>`;
     }
 
-    // Increment error counter in progress bar
     if (!appState._fetchErrorCount) appState._fetchErrorCount = 0;
     appState._fetchErrorCount++;
     const errEl = document.getElementById('progress-errors');
     if (errEl) errEl.textContent = appState._fetchErrorCount;
 }
 
-// Update the progress bar visual state to show completion (success or with warnings)
+// Flip the progress bar into success or has-errors completion state.
 function updateProgressBarComplete(errorCount) {
     const progressBar = $id('progress-bar');
     const progressFill = $id('progress-fill');
@@ -657,7 +732,7 @@ function updateProgressBarComplete(errorCount) {
     return { progressBar, progressFill };
 }
 
-// Build the completion summary text combining job count, test metrics, errors, and duration
+// Build the toast/completion text combining job count, test totals, errors, and duration.
 function computeCompletionSummary(totalJobs, failedJobs, errorCount, duration) {
     const agg = aggregateTestMetrics(appState.jobs.values());
     const parts = [`${totalJobs} jobs loaded`];
@@ -668,7 +743,7 @@ function computeCompletionSummary(totalJobs, failedJobs, errorCount, duration) {
     return { text: parts.join(' · '), cumTests: agg.total, totalJobs, duration };
 }
 
-// Schedule the progress bar to hide after a delay
+// Hide the progress bar after a 5s grace period so the user has time to read the result.
 function scheduleProgressBarHide(progressBar, progressFill) {
     setTimeout(() => {
         progressBar.classList.remove('visible', 'completed', 'has-errors');
@@ -676,19 +751,18 @@ function scheduleProgressBarHide(progressBar, progressFill) {
         progressFill.style.width = '0%';
         $id('progress-completion').classList.remove('visible', 'success', 'warning');
         $id('config-panel').style.display = '';
-        // Remove the bottom padding now that the overlay is gone
         var tc = document.querySelector('.table-container');
         if (tc) tc.classList.remove('has-progress-overlay');
     }, 5000);
 }
 
-// Process a fetch_complete event: finalize streaming, show completion summary, and clean up UI
+// Handle a fetch_complete event: finalise streaming, run the completion summary, and tidy UI.
 function handleFetchComplete(data) {
-    // Signal the motion system that fetch is complete — triggers settle animations
     motionSetPhase('complete');
-
-    // Flush remaining buffered rows and remove loading indicators
     endStreamingMode();
+
+    // Stamp the freshness chip — release managers see when data was last refreshed.
+    if (typeof markDataFresh === 'function') markDataFresh();
 
     const duration = data.duration_seconds || 0;
     const errorCount = appState._fetchErrorCount || 0;
@@ -697,7 +771,6 @@ function handleFetchComplete(data) {
 
     const { progressBar, progressFill } = updateProgressBarComplete(errorCount);
 
-    // Show completion summary
     const completionEl = $id('progress-completion');
     completionEl.classList.add('visible', errorCount > 0 ? 'warning' : 'success');
     const summary = computeCompletionSummary(totalJobs, failedJobs, errorCount, duration);
@@ -712,7 +785,6 @@ function handleFetchComplete(data) {
     updateSummaryBar();
     updateEmptyState();
     updateFetchButton();
-    // Final promotion panel refresh after all jobs loaded
     if (appState.promotionTime) updatePromotionPanel(appState.promotionTime);
 
     const toastMsg = summary.cumTests > 0
@@ -727,19 +799,16 @@ function handleFetchComplete(data) {
 
     scheduleProgressBarHide(progressBar, progressFill);
 
-    // Start (or restart) the background auto-refresh poll loop now that the
-    // table has data.  initAutoRefresh is idempotent — safe to call after
-    // every fetch_complete.
+    // Kick the background auto-refresh poll loop. initAutoRefresh is idempotent.
     if (typeof initAutoRefresh === 'function') {
         initAutoRefresh();
     }
 }
 
-// Abort the active fetch operation and reset UI to idle state
+// Abort the active fetch and reset UI back to idle.
 function cancelFetch() {
     if (!appState.activeOperationId) return;
 
-    // Abort the network request
     if (appState._fetchAbortController) {
         appState._fetchAbortController.abort();
         appState._fetchAbortController = null;
@@ -748,7 +817,6 @@ function cancelFetch() {
     appState.activeOperationId = null;
     appState._fetchErrorCount = 0;
 
-    // End streaming mode — flush any queued rows, hide loading indicator
     endStreamingMode();
 
     $id('progress-bar').classList.remove('visible', 'completed', 'has-errors');
@@ -756,11 +824,9 @@ function cancelFetch() {
     $id('progress-fill').classList.remove('complete', 'has-errors');
     $id('progress-completion').classList.remove('visible', 'success', 'warning');
     $id('config-panel').style.display = '';
-    // Remove overlay padding
     var tc = document.querySelector('.table-container');
     if (tc) tc.classList.remove('has-progress-overlay');
 
-    // Reset the motion narrative strip back to idle on cancel
     motionReset();
 
     updateHeaderStatus('idle');
@@ -768,7 +834,7 @@ function cancelFetch() {
     showToast('Fetch cancelled', 'warning');
 }
 
-// Detect status transitions for jobs and notify user of changes filtered out of current view
+// Toast the user if any status changed but the row is hidden by the current filter.
 function detectStatusTransitions() {
     const changed = [];
     appState.statusTransitions.forEach((oldStatus, jobId) => {
@@ -800,7 +866,7 @@ function detectStatusTransitions() {
     }
 }
 
-// Trigger a selective refresh of failed/unstable jobs or a subset, opening a new SSE stream
+// Open a new SSE stream that refreshes only failed/unstable/aborted/selected jobs.
 async function triggerSelectiveRefresh(scope) {
     if (appState.activeOperationId) {
         showToast('Operation already in progress', 'warning');
@@ -811,17 +877,45 @@ async function triggerSelectiveRefresh(scope) {
     if (!creds) return;
 
     let jobIds = [];
+    let backendScope = scope;
+    let scopeLabel = '';  // For the user-facing "Refreshing X jobs" toast.
     const statusMap = { 'failed': 'FAILURE', 'unstable': 'UNSTABLE', 'aborted': 'ABORTED' };
+
     if (statusMap[scope]) {
-        jobIds = Array.from(appState.jobs.values())
-            .filter(job => job.latest_status === statusMap[scope])
-            .map(job => job.job_id);
+        // the action-scope spec.
+        const actionScope = (typeof getActionScope === 'function') ? getActionScope() : null;
+        const sourceJobs = actionScope
+            ? actionScope.jobIds.map(id => appState.jobs.get(id)).filter(Boolean)
+            : Array.from(appState.jobs.values());
+        const filtered = sourceJobs.filter(job => job.latest_status === statusMap[scope]);
+        jobIds = filtered.map(job => job.job_id);
+        scopeLabel = `${filtered.length} ${scope} job${filtered.length === 1 ? '' : 's'}`;
+        if (actionScope && actionScope.label !== 'all') {
+            scopeLabel += ` from ${actionScope.label} scope`;
+        }
     } else if (scope === 'selected') {
         jobIds = Array.from(appState.selectedJobs);
+        scopeLabel = `${jobIds.length} selected job${jobIds.length === 1 ? '' : 's'}`;
+    } else if (scope === 'all') {
+        // "Full Refresh" honours the action-scope rule
+        const actionScope = (typeof getActionScope === 'function') ? getActionScope() : { label: 'all', jobIds: [], count: 0 };
+        if (actionScope.label !== 'all') {
+            jobIds = actionScope.jobIds;
+            backendScope = 'selected';
+        }
+        scopeLabel = (typeof describeScope === 'function') ? describeScope(actionScope) : `${jobIds.length || appState.jobs.size} jobs`;
+    }
+
+    if (jobIds.length === 0 && backendScope === 'selected') {
+        showToast('Nothing in the current scope to refresh', 'info');
+        return;
+    }
+    if (scopeLabel) {
+        showToast(`Refreshing ${scopeLabel}…`, 'info');
     }
 
     const body = {
-        scope: scope,
+        scope: backendScope,
         job_ids: jobIds,
         jenkins_url: creds.jenkins_url,
         username: creds.username,
@@ -834,12 +928,11 @@ async function triggerSelectiveRefresh(scope) {
         appState.statusTransitions.set(jobId, job.latest_status);
     });
 
-    // Full refresh ('all') resets dashboard state; scoped refreshes do not
+    // Full refresh resets dashboard state; scoped refreshes preserve filters/sort/selection.
     if (scope === 'all') {
         resetDashboardState();
     }
 
-    // Set buttons to loading state
     const fetchBtn = document.getElementById('btn-fetch');
     fetchBtn.disabled = true;
     document.getElementById('btn-update').disabled = true;
@@ -848,7 +941,6 @@ async function triggerSelectiveRefresh(scope) {
     await initFetchStream('/api/refresh/stream', body);
 }
 
-// Route refresh button actions to the selective refresh handler
 function handleRefreshAction(action) {
     if (!action) return;
     triggerSelectiveRefresh(action);

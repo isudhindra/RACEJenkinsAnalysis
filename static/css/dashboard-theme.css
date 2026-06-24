@@ -1,101 +1,118 @@
-/* ============================================================================
- * Dashboard theme — colour, typography, components.
- * Loaded after the inline <style> in dashboard.html so it cascades on top.
- * Remove the <link> tag to revert to the original look.
- * ========================================================================= */
+/* 
+ * Dashboard theme — brutalist black-border palette, typography, and components.
+ * Layered on top of dashboard.css via !important so it always wins the cascade.
+ * Remove the <link> in dashboard.html to revert to the base styles.
+ * = */
 
 
-/* ---- Theme tokens ------------------------------------------------------- */
+/*  Theme tokens --- */
 :root {
   /* Palette */
-  --theme-blue:        #1d70b8;
-  --theme-dark-blue:   #003078;
-  --theme-light-blue:  #5694ca;
-  --theme-black:       #0b0c0c;
-  --theme-dark-grey:   #505a5f;
-  --theme-mid-grey:    #b1b4b6;
-  --theme-light-grey:  #f3f2f1;
-  --theme-white:       #ffffff;
-  --theme-green:       #00703c;
+  --theme-blue: #1d70b8;
+  --theme-dark-blue: #003078;
+  --theme-light-blue: #5694ca;
+  --theme-black: #0b0c0c;
+  --theme-dark-grey: #505a5f;
+  --theme-mid-grey: #b1b4b6;
+  --theme-light-grey: #f3f2f1;
+  --theme-white: #ffffff;
+  --theme-green: #00703c;
   --theme-light-green: #cce2d8;
-  --theme-red:         #d4351c;
-  --theme-light-red:   #f6d7d2;
-  --theme-orange:      #f47738;
-  --theme-yellow:      #ffdd00;
-  --theme-turquoise:   #28a197;
-  --theme-purple:      #4c2c92;
-  --theme-link-visited:#4c2c92;
+  --theme-red: #d4351c;
+  --theme-light-red: #f6d7d2;
+  --theme-orange: #f47738;
+  --theme-yellow: #ffdd00;
+  --theme-turquoise: #28a197;
+  --theme-purple: #4c2c92;
+  --theme-link-visited: #4c2c92;
 
   /* Surfaces */
-  --color-canvas:           var(--theme-light-grey);
-  --color-surface:          var(--theme-white);
-  --color-surface-raised:   var(--theme-white);
-  --color-surface-sunken:   var(--theme-light-grey);
-  --color-surface-overlay:  rgba(11, 12, 12, 0.06);
-  --color-bg-light:         var(--theme-light-grey);
-  --color-panel:            var(--theme-white);
+  --color-canvas: var(--theme-light-grey);
+  --color-surface: var(--theme-white);
+  --color-surface-raised: var(--theme-white);
+  --color-surface-sunken: var(--theme-light-grey);
+  --color-surface-overlay: rgba(11, 12, 12, 0.06);
+  --color-bg-light: var(--theme-light-grey);
+  --color-panel: var(--theme-white);
 
   /* Text */
-  --color-text-primary:   var(--theme-black);
+  --color-text-primary: var(--theme-black);
   --color-text-secondary: var(--theme-dark-grey);
-  --color-text-tertiary:  var(--theme-mid-grey);
-  --color-text-inverse:   var(--theme-white);
+  --color-text-tertiary: var(--theme-mid-grey);
+  --color-text-inverse: var(--theme-white);
 
   /* Borders */
-  --color-border:        var(--theme-mid-grey);
+  --color-border: var(--theme-mid-grey);
   --color-border-strong: var(--theme-black);
   --color-border-subtle: #d8d8d8;
 
-  /* Status (semantic names preserved for the rest of the app) */
-  --color-passed:          var(--theme-green);
-  --color-passed-muted:    var(--theme-light-green);
-  --color-passed-subtle:   #e8f3ee;
-  --color-failed:          var(--theme-red);
-  --color-failed-muted:    var(--theme-light-red);
-  --color-failed-subtle:   #fbeae7;
-  --color-unstable:        var(--theme-orange);
-  --color-unstable-muted:  #fde2cf;
+  /* Status semantics — names kept stable so app code doesn't have to know
+   * which theme is loaded. */
+  --color-passed: var(--theme-green);
+  --color-passed-muted: var(--theme-light-green);
+  --color-passed-subtle: #e8f3ee;
+  --color-failed: var(--theme-red);
+  --color-failed-muted: var(--theme-light-red);
+  --color-failed-subtle: #fbeae7;
+  --color-unstable: var(--theme-orange);
+  --color-unstable-muted: #fde2cf;
   --color-unstable-subtle: #fef0e3;
-  --color-aborted:         var(--theme-dark-grey);
-  --color-aborted-muted:   var(--theme-light-grey);
-  --color-info:            var(--theme-blue);
-  --color-info-muted:      #cce0ee;
-  --color-info-subtle:     #eaf2f8;
-  --color-warning:         var(--theme-orange);
-  --color-error-bg:        var(--theme-light-red);
-  --color-error-border:    var(--theme-red);
+  --color-aborted: var(--theme-dark-grey);
+  --color-aborted-muted: var(--theme-light-grey);
+  --color-info: var(--theme-blue);
+  --color-info-muted: #cce0ee;
+  --color-info-subtle: #eaf2f8;
+  --color-warning: var(--theme-orange);
+  --color-error-bg: var(--theme-light-red);
+  --color-error-border: var(--theme-red);
 
-  /* Flat — drop soft shadows */
+  /* Brutalist look: no soft shadows. Focus uses a yellow ring instead. */
   --shadow-xs: none;
   --shadow-sm: none;
   --shadow-md: none;
   --shadow-lg: none;
   --shadow-xl: none;
-  --shadow-glow-blue:  0 0 0 3px var(--theme-yellow);
+  --shadow-glow-blue: 0 0 0 3px var(--theme-yellow);
   --shadow-glow-green: 0 0 0 3px var(--theme-yellow);
-  --shadow-glow-red:   0 0 0 3px var(--theme-yellow);
+  --shadow-glow-red: 0 0 0 3px var(--theme-yellow);
 }
 
 
-/* ---- Typography --------------------------------------------------------- */
-body, button, input, select, textarea {
+/*  Typography - */
+body,
+button,
+input,
+select,
+textarea {
   font-family: "system sans-serif", arial, "Helvetica Neue", helvetica, sans-serif !important;
   letter-spacing: 0;
 }
-body { font-size: 19px; line-height: 1.31579; }
-h1, .header-abbr { font-weight: 700 !important; letter-spacing: 0; }
+
+body {
+  font-size: 19px;
+  line-height: 1.31579;
+}
+
+h1,
+.header-abbr {
+  font-weight: 700 !important;
+  letter-spacing: 0;
+}
 
 
-/* ---- Top header bar ----------------------------------------------------- */
-/* Black strip + 4px blue accent below, drawn via box-shadow so it doesn't
- * take layout space (avoids shifting the header content off-centre). */
+/*  Top header bar - */
+/* Black strip with a 4px blue accent below. The accent uses inset box-shadow
+ * (not border) so it doesn't push header content off-centre. */
 .app-header {
   background: var(--theme-black) !important;
   color: var(--theme-white) !important;
   border-bottom: 0 !important;
   box-shadow: inset 0 -4px 0 var(--theme-blue) !important;
 }
-.app-header::after { display: none !important; }
+
+.app-header::after {
+  display: none !important;
+}
 
 .app-header-title h1,
 .app-header-title-row,
@@ -105,33 +122,43 @@ h1, .header-abbr { font-weight: 700 !important; letter-spacing: 0; }
   color: var(--theme-white) !important;
   text-shadow: none !important;
 }
-.app-header-subtitle { opacity: 0.9; }
+
+.app-header-subtitle {
+  opacity: 0.9;
+}
 
 .app-header-logo svg path,
 .app-header-logo svg circle,
-.app-header-logo svg rect { stroke: var(--theme-white); fill: var(--theme-white); }
+.app-header-logo svg rect {
+  stroke: var(--theme-white);
+  fill: var(--theme-white);
+}
 
 
-/* ---- Links -------------------------------------------------------------- */
+/*  Links -- */
 a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo) {
   color: var(--theme-blue);
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.1em;
 }
+
 a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):visited {
   color: var(--theme-link-visited);
 }
+
 a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
   color: var(--theme-dark-blue);
   text-decoration-thickness: 3px;
 }
 
 
-/* ---- Buttons ------------------------------------------------------------ */
-/* Square corners; primary = green with a 2px-darker bottom shadow (the
- * "pressable" lift); secondary = white with 2px black border. */
-.cfg-btn, .ops-btn, .btn {
+/*  Buttons  */
+/* Square corners. Primary = green with a 2px darker bottom shadow ("pressable"
+ * lift). Secondary = white with a 2px black border. */
+.cfg-btn,
+.ops-btn,
+.btn {
   border-radius: 0 !important;
   box-shadow: none !important;
   text-transform: none;
@@ -149,6 +176,7 @@ a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
   border: 2px solid var(--theme-green) !important;
   box-shadow: 0 2px 0 #002d18 !important;
 }
+
 .cfg-btn-primary:hover,
 .cfg-btn-success:hover,
 .ops-btn-primary:hover,
@@ -158,19 +186,115 @@ a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
   color: var(--theme-white) !important;
 }
 
-/* Secondary */
+/* Secondary covers ops-btn-secondary AND ops-btn-action (Rerun, Failures) so
+ * every toolbar button shares the same brutalist shell. Without action here,
+ * Rerun/Failures fell back to the soft base and looked orphaned. */
 .cfg-btn-secondary,
 .ops-btn-secondary,
-.ops-btn-view {
+.ops-btn-action {
   background: var(--theme-white) !important;
   color: var(--theme-black) !important;
   border: 2px solid var(--theme-black) !important;
   box-shadow: 0 2px 0 var(--theme-black) !important;
 }
+
 .cfg-btn-secondary:hover,
 .ops-btn-secondary:hover,
-.ops-btn-view:hover {
+.ops-btn-action:hover {
   background: var(--theme-light-grey) !important;
+}
+
+/* Ghost (Clear, Diag): transparent at rest so they recede, gain the full
+ * brutalist border on hover/focus to confirm they're interactive. */
+.ops-btn-ghost {
+  background: transparent !important;
+  color: var(--theme-black) !important;
+  border: 2px solid transparent !important;
+  box-shadow: none !important;
+}
+
+.ops-btn-ghost:hover {
+  background: var(--theme-light-grey) !important;
+  border-color: var(--theme-black) !important;
+  box-shadow: 0 2px 0 var(--theme-black) !important;
+}
+
+/* Toolbar group separators. Beefed up to 2px black so they don't look
+ * like hairline rendering glitches next to the 2px button borders. */
+.ops-sep {
+  background: var(--theme-black) !important;
+  width: 2px !important;
+  height: 24px !important;
+  margin: 0 6px !important;
+}
+
+/* Match the dropdown surface to the triggering button (same black shell). */
+.ops-dropdown-menu {
+  border: 2px solid var(--theme-black) !important;
+  border-radius: 0 !important;
+  box-shadow: 0 4px 0 var(--theme-black) !important;
+}
+
+/* Kill the base press-ripple: the 2px black drop shadow already gives
+ * tactile feedback, and the blue tint clashes with this palette. */
+.ops-btn::after {
+  display: none !important;
+}
+
+/* Detail | Summary segmented control. Active segment inverts. */
+.ops-segment {
+  border-radius: 0 !important;
+  border: 2px solid var(--theme-black) !important;
+  box-shadow: 0 2px 0 var(--theme-black) !important;
+  background: var(--theme-white) !important;
+  color: var(--theme-black) !important;
+}
+
+.ops-segment + .ops-segment {
+  border-left-width: 0 !important;
+}
+
+.ops-segment.is-active {
+  background: var(--theme-black) !important;
+  color: var(--theme-white) !important;
+}
+
+.ops-segment:hover {
+  background: var(--theme-light-grey) !important;
+}
+
+.ops-segment.is-active:hover {
+  background: #1a1a1a !important;
+}
+
+/* Split button (Refresh): main button + caret read as one control with
+ * an internal divider — caret drops its left border. */
+.ops-split .ops-split-main,
+.ops-split .ops-split-caret {
+  border-radius: 0 !important;
+}
+
+.ops-split .ops-split-main {
+  border-right-width: 0 !important;
+}
+
+/* Failures button when count is 0 — keep the shell, mute the fill. */
+.ops-btn-action.is-empty {
+  background: var(--theme-light-grey) !important;
+  color: var(--theme-dark-grey) !important;
+}
+
+.ops-btn-action.is-empty:hover {
+  background: var(--theme-light-grey) !important;
+}
+
+/* Heavier zone separator — marks the boundary between "act on rows" and
+ * "narrow the view". */
+.ops-sep--zone {
+  background: var(--theme-black) !important;
+  width: 2px !important;
+  height: 28px !important;
+  margin: 0 8px !important;
 }
 
 /* Danger */
@@ -180,6 +304,7 @@ a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
   border: 2px solid var(--theme-red) !important;
   box-shadow: 0 2px 0 #55150b !important;
 }
+
 .cfg-btn-danger:hover {
   background: #aa2a16 !important;
   border-color: #aa2a16 !important;
@@ -198,8 +323,8 @@ a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
 }
 
 
-/* ---- Focus state -------------------------------------------------------- */
-/* Yellow background + 3px black bottom bar on anything keyboard-focusable. */
+/*  Focus state  */
+/* Yellow background + black 3px underbar for keyboard-focused elements. */
 *:focus,
 *:focus-visible {
   outline: 3px solid transparent !important;
@@ -209,7 +334,8 @@ a:not(.cfg-btn):not(.ops-btn):not(.btn):not(.app-header-logo):hover {
     0 -2px var(--theme-yellow),
     0 4px var(--theme-black) !important;
 }
-/* Buttons keep their own colour and gain a yellow outline + black shadow. */
+
+/* Buttons preserve their fill on focus and gain a yellow outline. */
 .cfg-btn:focus,
 .ops-btn:focus,
 .btn:focus,
@@ -222,7 +348,7 @@ button:focus {
 }
 
 
-/* ---- Inputs ------------------------------------------------------------- */
+/*  Inputs - */
 input[type="text"],
 input[type="password"],
 input[type="datetime-local"],
@@ -238,6 +364,7 @@ textarea {
   color: var(--theme-black) !important;
   box-shadow: none !important;
 }
+
 input:focus,
 select:focus,
 textarea:focus {
@@ -248,23 +375,27 @@ textarea:focus {
 }
 
 
-/* ---- Tables ------------------------------------------------------------- */
-/* No row dividers, 2px black header underline, hover highlight. */
+/*  Tables - */
+/* 2px black header underline, 1px row dividers, hover highlight. */
 table thead th {
   border-bottom: 2px solid var(--theme-black) !important;
   background: var(--theme-white) !important;
   color: var(--theme-black) !important;
   font-weight: 700;
 }
+
 table tbody td,
 table tbody th {
   border-bottom: 1px solid var(--theme-mid-grey) !important;
 }
-table tbody tr:hover { background: #fafafa !important; }
+
+table tbody tr:hover {
+  background: #fafafa !important;
+}
 
 
-/* ---- Status tags (per-row + release) ------------------------------------ */
-/* Rectangular, uppercase, bold. Status colour fills the whole pill. */
+/*  Status tags (per-row + release)  */
+/* Rectangular uppercase pills. Status colour fills the whole tag. */
 .regression-badge,
 .badge-status,
 .badge-passed,
@@ -281,19 +412,21 @@ table tbody tr:hover { background: #fafafa !important; }
   padding: 4px 8px !important;
 }
 
-/* Status → fill colour */
+/* Per-status fill colours. */
 .regression-badge-passed,
 .badge-passed,
 .badge-status[data-status="passed"] {
   background: var(--theme-green) !important;
   color: var(--theme-white) !important;
 }
+
 .regression-badge-failed,
 .badge-failed,
 .badge-status[data-status="failed"] {
   background: var(--theme-red) !important;
   color: var(--theme-white) !important;
 }
+
 .regression-badge-pending,
 .regression-badge-running,
 .badge-unstable,
@@ -301,21 +434,25 @@ table tbody tr:hover { background: #fafafa !important; }
   background: var(--theme-orange) !important;
   color: var(--theme-white) !important;
 }
+
 .badge-aborted {
   background: var(--theme-dark-grey) !important;
   color: var(--theme-white) !important;
 }
+
 .badge-fetch-error {
   background: var(--theme-purple) !important;
   color: var(--theme-white) !important;
 }
 
-/* The legacy "dot" indicator is redundant on solid tags. */
-.regression-badge-dot { display: none !important; }
+/* Hide the legacy dot — solid-fill pills don't need one. */
+.regression-badge-dot {
+  display: none !important;
+}
 
 
-/* ---- Panels / cards ----------------------------------------------------- */
-/* Flat surfaces, square corners, hairline border. */
+/*  Panels / cards - */
+/* Flat surfaces — square corners, hairline border, no shadow. */
 .kpi-panel,
 .kpi-card,
 .config-panel,
@@ -332,8 +469,8 @@ table tbody tr:hover { background: #fafafa !important; }
 }
 
 
-/* ---- Log-analysis chips ------------------------------------------------- */
-/* Rectangular and bold; background colour comes from rules.yaml domain. */
+/*  Log-analysis chips - */
+/* Rectangular bold pills. Background colour set inline from the rule domain. */
 .log-analysis-chip,
 .la-chip,
 .classification-chip {
@@ -346,10 +483,10 @@ table tbody tr:hover { background: #fafafa !important; }
 }
 
 
-/* ---- Catch-all pill normaliser ----------------------------------------- */
-/* Any state pill (every existing class + defensive [class*=…] sweep) gets
- * the same shape. The exceptions below (.header-status-chip, .ops-badge,
- * .promo-cat-tag, .badge-rerun) override with higher specificity. */
+/*  Catch-all pill normaliser - */
+/* Force every state pill to the same shape via a defensive class-name sweep.
+ * Exceptions (.header-status-chip, .ops-badge, .promo-cat-tag, .badge-rerun)
+ * override below with higher specificity. */
 [class*="badge"],
 [class*="-chip"],
 [class*="-pill"],
@@ -370,21 +507,28 @@ table tbody tr:hover { background: #fafafa !important; }
   display: inline-block;
   white-space: nowrap;
 }
-/* Circular indicators (dots) stay circular. */
+
+/* Dots stay circular regardless of the catch-all above. */
 .regression-badge-dot,
 [class*="-dot"] {
   border-radius: 999px !important;
 }
 
 
-/* ---- Status / Release Status column parity ----------------------------- */
-/* Identical width + alignment so the eye reads across cleanly. */
-.col-status, .col-regression { width: 110px !important; }
-.cell-status, .cell-regression {
+/*  Status / Release Status column parity - */
+/* Matched widths + centring so users can read both columns side by side. */
+.col-status,
+.col-regression {
+  width: 110px !important;
+}
+
+.cell-status,
+.cell-regression {
   text-align: center !important;
   vertical-align: middle !important;
   padding: 6px 8px !important;
 }
+
 .cell-status .badge-status,
 .cell-status [class*="badge"],
 .cell-regression .regression-badge {
@@ -393,31 +537,47 @@ table tbody tr:hover { background: #fafafa !important; }
 }
 
 
-/* ---- Compact table ----------------------------------------------------- */
+/*  Compact table - */
 table#job-table,
 .table-container table {
   border-collapse: collapse !important;
   border-spacing: 0 !important;
 }
+
 #job-table tbody td,
 #job-table tbody th {
   padding: 6px 10px !important;
   vertical-align: middle !important;
 }
-/* Tabular figures so digits stack under each other. */
-.cell-total, .cell-passed, .cell-failed, .cell-errors, .cell-skipped,
-.cell-exec-time, .cell-duration, .cell-build-number {
+
+/* Tabular figures so digits stack column-on-column. */
+.cell-total,
+.cell-passed,
+.cell-failed,
+.cell-errors,
+.cell-skipped,
+.cell-exec-time,
+.cell-duration,
+.cell-build-number {
   font-variant-numeric: tabular-nums !important;
   font-feature-settings: "tnum" 1;
 }
-/* Right-align numeric columns. */
-.cell-total, .cell-passed, .cell-failed, .cell-errors, .cell-skipped {
-  text-align: right !important;
+
+/* Centre numeric columns to match the centred headers. They're too narrow
+ * (~50px) for right-alignment to read as deliberate. */
+.cell-total,
+.cell-passed,
+.cell-failed,
+.cell-errors,
+.cell-skipped {
+  text-align: center !important;
 }
 
 
-/* ---- Sticky table header ----------------------------------------------- */
-.table-container { position: relative; }
+/*  Sticky table header --- */
+.table-container {
+  position: relative;
+}
 
 .table-overlay {
   position: absolute;
@@ -433,10 +593,12 @@ table#job-table,
   transition: opacity 0.18s ease;
   transition-delay: 90ms;
 }
+
 .table-overlay.is-visible {
   opacity: 1;
   pointer-events: auto;
 }
+
 .table-overlay-spinner {
   width: 36px;
   height: 36px;
@@ -445,10 +607,19 @@ table#job-table,
   border-radius: 50%;
   animation: tli-spin 0.7s linear infinite;
 }
+
 @media (prefers-reduced-motion: reduce) {
-  .table-overlay-spinner { animation: none; }
+  .table-overlay-spinner {
+    animation: none;
+  }
 }
-#job-table thead { position: sticky; top: 0; z-index: 5; }
+
+#job-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
 #job-table thead th {
   position: sticky;
   top: 0;
@@ -459,22 +630,23 @@ table#job-table,
 }
 
 
-/* ---- Column header wrap (don't clip) ----------------------------------- */
+/*  Column header wrap (don't clip) --- */
 #job-table thead .th-sort-label {
   overflow: visible !important;
   text-overflow: clip !important;
   white-space: normal !important;
   line-height: 1.2;
 }
-/* Metric headers ("Skipped"/"Errors") in a 50px column — shrink the label
- * font so it fits on one line. */
+
+/* Shrink metric-column header labels so "Skipped"/"Errors" fit on one line
+ * inside the narrow 50px column. */
 #job-table thead .col-metric .th-sort-label {
   font-size: 11px !important;
   letter-spacing: 0.3px;
 }
 
 
-/* ---- Log-analysis cell: full text, wrapping ---------------------------- */
+/*  Log-analysis cell: full text, wrapping  */
 .cell-log-analysis .rec-chip,
 .cell-log-analysis .log-analysis-chip,
 .cell-log-analysis [class*="-chip"] {
@@ -483,21 +655,24 @@ table#job-table,
   text-overflow: clip !important;
   white-space: normal !important;
 }
+
 .col-log-analysis {
   min-width: 240px !important;
   max-width: 520px !important;
 }
+
 .cell-log-analysis {
   white-space: normal !important;
   overflow: visible !important;
 }
+
 .cell-log-analysis .rec-chip-row {
   flex-wrap: wrap !important;
   align-items: flex-start !important;
 }
 
 
-/* ---- Promo summary strip (solid-fill status pills) --------------------- */
+/*  Promo summary chips (solid-fill, one per release bucket) -- */
 .promo-summary-chip {
   border-radius: 0 !important;
   border: 0 !important;
@@ -506,16 +681,35 @@ table#job-table,
   letter-spacing: 0.3px;
   text-transform: uppercase !important;
 }
-.promo-summary-chip .promo-chip-dot { display: none !important; }
-.promo-chip-passed { background: var(--theme-green) !important;     color: var(--theme-white) !important; }
-.promo-chip-failed { background: var(--theme-red) !important;       color: var(--theme-white) !important; }
-.promo-chip-inprog { background: var(--theme-orange) !important;    color: var(--theme-white) !important; }
-.promo-chip-notrun { background: var(--theme-dark-grey) !important; color: var(--theme-white) !important; }
+
+.promo-summary-chip .promo-chip-dot {
+  display: none !important;
+}
+
+.promo-chip-passed {
+  background: var(--theme-green) !important;
+  color: var(--theme-white) !important;
+}
+
+.promo-chip-failed {
+  background: var(--theme-red) !important;
+  color: var(--theme-white) !important;
+}
+
+.promo-chip-inprog {
+  background: var(--theme-orange) !important;
+  color: var(--theme-white) !important;
+}
+
+.promo-chip-notrun {
+  background: var(--theme-dark-grey) !important;
+  color: var(--theme-white) !important;
+}
 
 
-/* ---- Compact `.ops-badge` count pill ----------------------------------- */
-/* Override the catch-all sweep so "Failures 2" and "Rerun Selected (N)"
- * stay small, round, and vertically centred inside the host button. */
+/*  Compact `.ops-badge` count pill --- */
+/* Keep button counts ("Failures 2", "Rerun Selected (N)") small and round,
+ * overriding the catch-all rectangular pill normaliser. */
 button .ops-badge,
 .cfg-btn .ops-badge,
 .ops-btn .ops-badge,
@@ -535,14 +729,15 @@ button .ops-badge,
   text-transform: none !important;
   background: rgba(255, 255, 255, 0.25);
 }
+
 button .ops-badge.ops-badge-danger {
   background: var(--theme-red) !important;
   color: var(--theme-white) !important;
 }
 
 
-/* ---- Header status chip (READY / FETCHING / ERROR) --------------------- */
-/* Rounded pill on the dark header bar; flex layout centres dot + label. */
+/*  Header status chip (READY / FETCHING / ERROR) - */
+/* Rounded pill on the dark header. Per-state tints below for contrast. */
 .app-header .header-status-chip {
   display: flex !important;
   align-items: center !important;
@@ -558,6 +753,7 @@ button .ops-badge.ops-badge-danger {
   line-height: 1.4 !important;
   white-space: nowrap !important;
 }
+
 .app-header .header-status-label {
   text-transform: uppercase !important;
   letter-spacing: 0.05em !important;
@@ -566,27 +762,39 @@ button .ops-badge.ops-badge-danger {
   padding: 0 !important;
   border: 0 !important;
 }
-/* Per-state tints sit on the black header — bolder than usual for contrast. */
+
+/* Brighter per-state tints — needed to read against the black header. */
 .app-header .header-status-chip.status--connected {
   border-color: rgba(0, 112, 60, 0.4) !important;
   background: rgba(0, 112, 60, 0.18) !important;
 }
-.app-header .header-status-chip.status--connected .header-status-label { color: #6ee7a4 !important; }
+
+.app-header .header-status-chip.status--connected .header-status-label {
+  color: #6ee7a4 !important;
+}
+
 .app-header .header-status-chip.status--fetching {
   border-color: rgba(29, 112, 184, 0.4) !important;
   background: rgba(29, 112, 184, 0.18) !important;
 }
-.app-header .header-status-chip.status--fetching .header-status-label { color: #88b3d8 !important; }
+
+.app-header .header-status-chip.status--fetching .header-status-label {
+  color: #88b3d8 !important;
+}
+
 .app-header .header-status-chip.status--error {
   border-color: rgba(212, 53, 28, 0.5) !important;
   background: rgba(212, 53, 28, 0.2) !important;
 }
-.app-header .header-status-chip.status--error .header-status-label { color: #f4a89c !important; }
+
+.app-header .header-status-chip.status--error .header-status-label {
+  color: #f4a89c !important;
+}
 
 
-/* ---- Promo category filter tags ("Not Run (5)" etc.) -------------------- */
-/* Outlined pill so users can tell these are interactive checkboxes (vs the
- * solid status pills above). Fills solid on :checked. */
+/*  Promo category filter tags ("Not Run (5)" etc.)  */
+/* Outlined to signal "interactive checkbox" (vs the solid status chips above).
+ * Fills solid on :checked. */
 .promo-cat-tag {
   display: inline-flex !important;
   align-items: center !important;
@@ -605,16 +813,19 @@ button .ops-badge.ops-badge-danger {
   white-space: nowrap !important;
   box-shadow: none !important;
 }
-.promo-cat-checkbox input:checked + .promo-cat-tag--notrun {
+
+.promo-cat-checkbox input:checked+.promo-cat-tag--notrun {
   background: var(--theme-orange) !important;
   border-color: var(--theme-orange) !important;
   color: var(--theme-white) !important;
 }
-.promo-cat-checkbox input:checked + .promo-cat-tag--failed {
+
+.promo-cat-checkbox input:checked+.promo-cat-tag--failed {
   background: var(--theme-red) !important;
   border-color: var(--theme-red) !important;
   color: var(--theme-white) !important;
 }
+
 .promo-cat-count {
   font-weight: 700 !important;
   font-size: 11px !important;
@@ -622,9 +833,8 @@ button .ops-badge.ops-badge-danger {
 }
 
 
-/* ---- `.badge-rerun` — TRIGGERED metadata under the primary status ------ */
-/* Small rounded pill stacked below the primary status badge. Visibly
- * subordinate (10px vs 12px) so the eye reads primary status first. */
+/*  TRIGGERED metadata pill (below the primary status)  */
+/* Smaller (10px) than the status badge so primary status reads first. */
 .cell-status .badge-rerun,
 .badge-rerun {
   display: block !important;
@@ -642,55 +852,90 @@ button .ops-badge.ops-badge-danger {
   box-shadow: none !important;
   white-space: nowrap !important;
 }
-.badge-rerun-triggered { background: var(--theme-turquoise) !important; color: var(--theme-white) !important; }
-.badge-rerun-failed    { background: var(--theme-red) !important;       color: var(--theme-white) !important; }
-.badge-rerun-denied    { background: var(--theme-dark-grey) !important; color: var(--theme-white) !important; }
-.badge-rerun-disabled  { background: var(--theme-mid-grey) !important;  color: var(--theme-black) !important; }
 
-
-/* ---- Auto-refresh: row flash + toolbar toggle -------------------------- */
-/* 1.6s yellow pulse when the background poller detects a status change. */
-@keyframes auto-refresh-row-flash {
-  0%   { background-color: var(--theme-yellow); box-shadow: inset 4px 0 0 var(--theme-black); }
-  60%  { background-color: var(--theme-yellow); box-shadow: inset 4px 0 0 var(--theme-black); }
-  100% { background-color: transparent;          box-shadow: inset 4px 0 0 transparent; }
+.badge-rerun-triggered {
+  background: var(--theme-turquoise) !important;
+  color: var(--theme-white) !important;
 }
-tr.row-auto-refresh-flash > td {
+
+.badge-rerun-failed {
+  background: var(--theme-red) !important;
+  color: var(--theme-white) !important;
+}
+
+.badge-rerun-denied {
+  background: var(--theme-dark-grey) !important;
+  color: var(--theme-white) !important;
+}
+
+.badge-rerun-disabled {
+  background: var(--theme-mid-grey) !important;
+  color: var(--theme-black) !important;
+}
+
+
+/*  Auto-refresh: row flash + toolbar toggle -- */
+/* 1.6s yellow pulse on rows whose status changed during a background poll. */
+@keyframes auto-refresh-row-flash {
+  0% {
+    background-color: var(--theme-yellow);
+    box-shadow: inset 4px 0 0 var(--theme-black);
+  }
+
+  60% {
+    background-color: var(--theme-yellow);
+    box-shadow: inset 4px 0 0 var(--theme-black);
+  }
+
+  100% {
+    background-color: transparent;
+    box-shadow: inset 4px 0 0 transparent;
+  }
+}
+
+tr.row-auto-refresh-flash>td {
   animation: auto-refresh-row-flash 1.6s ease-out 1;
 }
 
-/* Toggle button: ON = solid green, OFF = outlined grey. */
+/* ON = solid green. OFF rule below keeps the brutalist shell. */
 #btn-auto-refresh.auto-refresh-on {
   background: var(--theme-green) !important;
   color: var(--theme-white) !important;
   border: 2px solid var(--theme-green) !important;
   box-shadow: 0 2px 0 #002d18 !important;
 }
+
+/* OFF: keep the black-bordered secondary shell so the toggle reads as
+ * "available but inactive", not disabled. */
 #btn-auto-refresh.auto-refresh-off {
-  background: var(--theme-white) !important;
-  color: var(--theme-dark-grey) !important;
-  border: 2px solid var(--theme-mid-grey) !important;
-  box-shadow: 0 2px 0 var(--theme-mid-grey) !important;
+  background: var(--theme-light-grey) !important;
+  color: var(--theme-black) !important;
+  border: 2px solid var(--theme-black) !important;
+  box-shadow: 0 2px 0 var(--theme-black) !important;
 }
-#btn-auto-refresh:hover { filter: brightness(0.95); }
+
+#btn-auto-refresh:hover {
+  filter: brightness(0.95);
+}
 
 
-/* ---- Row selection (selection-enhancements.js) ------------------------- */
-/* Pointer cursor hints that the whole row is clickable.
- * .row-selected adds a 4px theme-blue left bar.
- * user-select: none stops shift+click from leaving a text-selection rect. */
+/*  Row selection (selection-enhancements.js) - */
+/* Whole row is clickable. .row-selected paints a 4px blue left bar; the
+ * user-select rule keeps shift-click from leaving a text-selection rect. */
 #job-table tbody tr[data-job-id]:not(.detail-row) {
   cursor: pointer;
   user-select: none;
 }
-#job-table tbody tr[data-job-id]:not(.detail-row):hover > td {
+
+#job-table tbody tr[data-job-id]:not(.detail-row):hover>td {
   background: #f6f7f9 !important;
 }
-#job-table tbody tr.row-selected > td {
+
+#job-table tbody tr.row-selected>td {
   background: #f3f4f6 !important;
 }
 
-#job-table tbody tr.row-selected > td:first-child {
+#job-table tbody tr.row-selected>td:first-child {
   box-shadow: inset 4px 0 0 var(--theme-blue);
 }
 
@@ -699,11 +944,12 @@ tr.row-auto-refresh-flash > td {
   color: var(--theme-black) !important;
   font-weight: 600 !important;
 }
+
 #job-table tbody tr.row-selected .job-name-cell a:hover {
   color: var(--theme-blue) !important;
 }
 
-/* Count pill next to each "Select … (N)" dropdown item. */
+/* (N) count next to each "Select …" dropdown entry. */
 .ops-dropdown-count {
   margin-left: 6px;
   color: var(--theme-dark-grey);
@@ -711,7 +957,7 @@ tr.row-auto-refresh-flash > td {
   font-size: 11px;
 }
 
-/* Ctrl/Cmd held → "cell" cursor signals paint-select is armed. */
+/* Cmd/Ctrl held: cursor changes to "cell" to signal paint-select is armed. */
 body.paint-select-armed #job-table tbody tr[data-job-id]:not(.detail-row),
 body.paint-select-armed #job-table tbody tr[data-job-id]:not(.detail-row) * {
   cursor: cell !important;
@@ -720,9 +966,11 @@ body.paint-select-armed #job-table tbody tr[data-job-id]:not(.detail-row) * {
 #job-table {
   table-layout: fixed !important;
 }
+
 #job-table tbody tr[data-job-id]:not(.detail-row) {
   contain: layout style paint;
 }
+
 #job-table tbody tr[data-job-id] td {
   animation: none !important;
 }

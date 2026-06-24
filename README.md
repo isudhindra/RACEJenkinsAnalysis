@@ -1,326 +1,400 @@
-<h1 align="center">JJAT - Jenkins Job Analysis Tool</h1>
+<h1 align="left">RACE — Release Assurance & Confidence Engine</h1>
 
-<p align="center">
-A local dashboard that pulls live job status from Jenkins, validates each job
-against a release-promotion time, classifies failures from the console log,
-and surfaces everything in one screen.<br>
-<em>Each user runs their own instance.</em>
+<p align="left">
+  One screen for every Jenkins job in a release. See what passed, what failed,
+  what's still pending — and re-run the reds without leaving the page.<br>
+  <em>Local-only. VPN-gated. Nothing leaves your laptop.</em>
 </p>
 
-<p align="center">
-  <a href="#features">Features</a> ·
-  <a href="#prerequisites">Prerequisites</a> ·
-  <a href="#setup">Setup</a> ·
-  <a href="#configure-jenkins-instances">Configure</a> ·
-  <a href="#using-the-dashboard">Use</a> ·
-  <a href="#tuning-fetch-speed">Tuning</a> ·
-  <a href="#troubleshooting">Troubleshooting</a>
-</p>
+<br>
 
----
+## What it does
 
-## Features
+- Lists every Jenkins job in a single live table — green, red, in progress, queued.
+- Explains failures in one line — timeout, missing data, browser crash, infra blip.
+- Pins a **release time** and flags each job **PASS / PENDING / FAIL** against it.
+- Reruns selected failures in one click; the table auto-refreshes every 30 seconds.
+- Generates a local API token so only the dashboard (not random other apps on your box) can drive it.
 
-| Business                                          | User                                                          |
-| ------------------------------------------------- | ------------------------------------------------------------- |
-| Faster release go/no-go decisions                 | Pick a promotion time → automatic PASS / PENDING / FAIL       |
-| Earlier visibility of validation gaps             | Failures come pre-classified with evidence inline             |
-| Failure-triage knowledge versioned in the repo    | Background refresh every 30 s, row flashes on change          |
-| No server to run — each engineer hosts their own  | Bulk-select (dropdown, shift+click, paint) + one-click rerun  |
+## Why use it
 
----
+From the moment a release is promoted, every related Jenkins job needs to be tracked, executed, and passed before sign-off. RACE replaces the spreadsheet-and-six-tabs ritual with a single dashboard that knows which jobs belong to the release, classifies failures, and gives you one button to retry. It's built for QA, release engineering, and dev managers who own the green-light call.
 
-## Prerequisites
+<br>
 
-- **Python 3.8 or newer**
-- A Jenkins instance you can reach over HTTPS
-- A Jenkins API token &nbsp;·&nbsp; *Jenkins → your user → Configure → API Token*
+## Quick start
 
-**Python packages**
+Pick your OS. Each block has two parts: a **first-time setup** you do once, and an **every-time launch** you use afterwards.
 
-| Package    | Version  | Purpose                   |
-| ---------- | -------- | ------------------------- |
-| `Flask`    | `≥ 3.0`  | HTTP server + templating  |
-| `requests` | `≥ 2.31` | Jenkins API client        |
-| `PyYAML`   | `≥ 6.0`  | Loads `config/rules.yaml` |
-
----
-
-## Setup
-
-Pick your OS:
+> Replace `<project-folder>` with the actual folder name from your clone or unzip.
 
 <details open>
 <summary><strong>macOS</strong></summary>
 
 &nbsp;
 
-**1. Install** — from the project root:
+### First time only
+
+**1. Install Python.** In Terminal, run `python3 --version`. If it reports 3.10 or newer you're set. Otherwise grab the installer from [python.org/downloads](https://www.python.org/downloads/).
+
+**2. Set up the project — copy the whole block.**
 
 ```bash
+cd ~/Downloads/<project-folder>
 python3 -m venv venv
 source venv/bin/activate
-pip install Flask requests PyYAML
+pip install -r requirements.lock.txt && pip install -e . --no-deps
+cat > .env <<'EOF'
+JENKINS_TEST_USERNAME=
+JENKINS_TEST_API_KEY=
+EOF
+chmod 600 .env
+# open .env and fill in your Jenkins username + API token
+bash scripts/setup.sh
 ```
 
-**2. Set credentials** *(optional, recommended)* — add to `~/.zshrc`:
+The final line installs `analyseJenkins` as a shell command — written into `~/.zshrc` (or `~/.bash_profile` for bash users).
+
+**3. Open a fresh Terminal window** and launch from anywhere:
 
 ```bash
-export JENKINS_NP_USERNAME="your.username"
-export JENKINS_NP_API_KEY1="your-api-token"
+analyseJenkins
 ```
+
+The browser opens at **http://127.0.0.1:5000** automatically. `Ctrl+C` to stop.
+
+### Every time after that
 
 ```bash
-source ~/.zshrc
+analyseJenkins
 ```
-
-> When both vars are set the dashboard shows a one-click **Authenticate
-> with environment credentials** button. Otherwise paste credentials in
-> the UI each time.
-
-**3. Register `analyseJenkins`** *(optional one-command launcher)*:
-
-```bash
-bash setup/setup.sh
-source ~/.zshrc       # or ~/.bash_profile if you're on bash
-```
-
-**4. Run**:
-
-```bash
-python app.py         # or, after step 3:  analyseJenkins
-```
-
-Server starts on **http://127.0.0.1:5000** and your default browser opens
-automatically. `Ctrl+C` to stop.
 
 </details>
 
 <details open>
-<summary><strong>Ubuntu / Linux</strong></summary>
+<summary><strong>Windows</strong></summary>
 
 &nbsp;
 
-**1. Install**:
+### First time only
 
-```bash
-sudo apt update && sudo apt install -y python3-venv python3-pip
-python3 -m venv venv
-source venv/bin/activate
-pip install Flask requests PyYAML
-```
+**1. Install Python.** In PowerShell, run `py --version`. If it reports 3.10 or newer you're set. Otherwise download from [python.org/downloads](https://www.python.org/downloads/) and **tick "Add Python to PATH"** on the first installer screen.
 
-**2. Set credentials** *(optional, recommended)* — add to `~/.bashrc`:
-
-```bash
-export JENKINS_NP_USERNAME="your.username"
-export JENKINS_NP_API_KEY1="your-api-token"
-```
-
-```bash
-source ~/.bashrc
-```
-
-> When both vars are set the dashboard shows a one-click **Authenticate
-> with environment credentials** button. Otherwise paste credentials in
-> the UI each time.
-
-**3. Register `analyseJenkins`** *(optional one-command launcher)*:
-
-```bash
-bash setup/setup.sh
-source ~/.bashrc
-```
-
-**4. Run**:
-
-```bash
-python app.py         # or, after step 3:  analyseJenkins
-```
-
-Server starts on **http://127.0.0.1:5000** and your default browser opens
-automatically. `Ctrl+C` to stop.
-
-> **WSL users**: follow this section, not the Windows one. WSL is a
-> Linux environment.
-
-</details>
-
-<details open>
-<summary><strong>Windows (PowerShell)</strong></summary>
-
-&nbsp;
-
-**1. Install**:
+**2. Set up the project — copy the whole block.**
 
 ```powershell
+cd C:\path\to\<project-folder>
 py -3 -m venv venv
 venv\Scripts\Activate.ps1
-pip install Flask requests PyYAML
+pip install -r requirements.lock.txt; pip install -e . --no-deps
+@"
+JENKINS_TEST_USERNAME=
+JENKINS_TEST_API_KEY=
+"@ | Set-Content -Path .env -Encoding UTF8
+# open .env in Notepad and fill in your Jenkins username + API token
+.\scripts\setup.ps1
 ```
 
-> If PowerShell blocks `Activate.ps1`, run once:
+> If PowerShell blocks `Activate.ps1`, run this once and retry:
 > `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`
 
-**2. Set credentials** *(optional, recommended)*:
+The final line installs `analyseJenkins` as a PowerShell command — written into your `$PROFILE`.
+
+**3. Open a fresh PowerShell window** and launch from anywhere:
 
 ```powershell
-[Environment]::SetEnvironmentVariable("JENKINS_NP_USERNAME", "your.username", "User")
-[Environment]::SetEnvironmentVariable("JENKINS_NP_API_KEY1", "your-api-token", "User")
+analyseJenkins
 ```
 
-Close and reopen PowerShell so the new variables are picked up.
+The browser opens at **http://127.0.0.1:5000** automatically. `Ctrl+C` to stop.
 
-> When both vars are set the dashboard shows a one-click **Authenticate
-> with environment credentials** button. Otherwise paste credentials in
-> the UI each time.
-
-**3. Register `analyseJenkins`** *(optional one-command launcher)*:
+### Every time after that
 
 ```powershell
-.\setup\setup.ps1
-. $PROFILE
+analyseJenkins
 ```
-
-> PowerShell 5.1 and PowerShell 7+ have separate profiles. If you use
-> both, run `.\setup\setup.ps1` inside each one.
-
-**4. Run**:
-
-```powershell
-python app.py         # or, after step 3:  analyseJenkins
-```
-
-Server starts on **http://127.0.0.1:5000** and your default browser opens
-automatically. `Ctrl+C` to stop.
 
 </details>
 
----
+<details open>
+<summary><strong>Linux / Ubuntu</strong></summary>
 
-## Configure Jenkins instances
+&nbsp;
 
-Edit `config/contexts.json` to add Jenkins servers and predefined job
-lists. Minimal example:
+### First time only
 
-```json
-{
-  "instances": [
-    {
-      "id": "my-jenkins",
-      "display_name": "My Jenkins (SIT)",
-      "jenkins_url": "https://jenkins.example.com",
-      "environment": "SIT",
-      "predefined_job_lists": [
-        {
-          "id": "api-smoke-sit",
-          "name": "API Smoke (SIT)",
-          "job_list_file": "config/job_lists/api-smoke-sit.json",
-          "environment": "SIT",
-          "source_mode": "job_list"
-        }
-      ]
-    }
-  ],
-  "defaults": { "max_workers": 24, "timeout": 30 }
-}
-```
-
-> Job-list files live in `config/job_lists/`. Each is a JSON array of
-> Jenkins job names — see the existing examples in that folder.
-
----
-
-## Tuning fetch speed
-
-Fetch-jobs is I/O-bound — most of each per-job call is the wait on Jenkins.
-The default worker count is **24** parallel threads, which works well for
-most Jenkins masters. If your server can handle more (or less), override
-with an env var before launching:
+**1. Install Python and the venv tooling.**
 
 ```bash
-# macOS / Linux
-export JENKINS_MAX_WORKERS=40
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip
+```
+
+**2. Set up the project — copy the whole block.**
+
+```bash
+cd ~/<project-folder>
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.lock.txt && pip install -e . --no-deps
+cat > .env <<'EOF'
+JENKINS_TEST_USERNAME=
+JENKINS_TEST_API_KEY=
+EOF
+chmod 600 .env
+# open .env and fill in your Jenkins username + API token
+bash scripts/setup.sh
+```
+
+The final line installs `analyseJenkins` as a shell command — written into `~/.bashrc` (or `~/.zshrc`).
+
+**3. Open a fresh terminal** and launch from anywhere:
+
+```bash
 analyseJenkins
 ```
 
-```powershell
-# Windows
-$Env:JENKINS_MAX_WORKERS = "40"
+The browser opens at **http://127.0.0.1:5000** automatically. `Ctrl+C` to stop.
+
+### Every time after that
+
+```bash
 analyseJenkins
 ```
 
-| Workers | Notes                                                                      |
-| ------- | -------------------------------------------------------------------------- |
-| `15`    | Conservative — old default. Use if your Jenkins is shared/under-provisioned. |
-| `24`    | **Default.** Comfortable for most masters.                                |
-| `40–50` | Aggressive. May trigger `429` / `503` from under-provisioned Jenkins.     |
-| `> 64`  | Rejected — capped to protect against typos that overload the master.       |
+</details>
 
-The HTTP connection pool inside `JenkinsClient` is automatically sized to
-match, so every thread gets a real concurrent socket (default `requests`
-behavior would have queued the overflow).
+> Prefer not to keep credentials on disk? Skip the `.env` block above and use shell env vars or the OS keychain instead — see [Configuration](#configuration). Either path works; `.env` is just the most convenient default.
 
----
+<br>
 
 ## Using the dashboard
 
-| # | Step                  | What to do                                                          |
-| - | --------------------- | ------------------------------------------------------------------- |
-| 1 | **Pick an instance**  | Choose from the config panel at the top                             |
-| 2 | **Authenticate**      | Click the env-creds shortcut, or paste username + token             |
-| 3 | **Fetch jobs**        | Pick a view or predefined list → **Fetch Jobs**                     |
-| 4 | **Validate release**  | *(Optional)* Set a Release Validation time to enable the column     |
-| 5 | **Watch it work**     | Auto-refresh every 30 s — toggle off if you'd rather not            |
+1. **Sign in.** With `.env` populated, one button auto-authenticates. Otherwise paste your Jenkins URL, username, and API token. *(Generate the token in Jenkins → your profile → Configure → API Token.)*
+2. **Choose a view** — for example *PRP1 All Jobs* — or pick a saved job list.
+3. **Click Fetch Jobs.** Every job loads with its current status.
+4. **Set a release time** *(optional)*. The *Release Status* column lights up with **PASS / PENDING / FAIL** for each job against that moment.
+5. **Rerun the reds.** Tick failing rows and hit **Rerun**.
 
----
+That's the whole tool.
+
+<br>
+
+## Configuration
+
+All configuration is environment-variable based. RACE supports three ways to provide credentials — pick the one that fits your workflow.
+
+> RACE is a local-only, VPN-gated tool. All three options below are acceptable for that threat model. The differences are workflow and how the secret sits on your machine — read the short trade-off note on each and pick what suits you.
+
+### Option 1 — Shell environment variables (preferred, ephemeral)
+
+Set the credentials in your current shell, then launch. Values live in RAM for that one session only — when the terminal closes, they're gone.
+
+**macOS / Linux**
+
+```bash
+export JENKINS_TEST_USERNAME=svc-account@example.com
+export JENKINS_TEST_API_KEY=11abcd…your-jenkins-api-token
+analyseJenkins
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:JENKINS_TEST_USERNAME = "svc-account@example.com"
+$env:JENKINS_TEST_API_KEY  = "11abcd…your-jenkins-api-token"
+analyseJenkins
+```
+
+*Trade-off:* the `export` / `$env:` line lands in your shell history (`~/.bash_history`, PSReadLine, etc.). Clear shell history afterwards if that matters in your environment.
+
+### Option 2 — `.env` file (persistent, convenient)
+
+The install steps already wrote a skeleton `.env` in the project root. Fill in the two lines, then lock the file:
+
+```
+JENKINS_TEST_USERNAME=svc-account@example.com
+JENKINS_TEST_API_KEY=11abcd…your-jenkins-api-token
+```
+
+```bash
+chmod 600 .env       # owner read/write only
+```
+
+`.env` is in `.gitignore`, and RACE warns at startup if the file is readable by anyone other than you — fix it with `chmod 600 .env` if you see that warning. Best for everyday use when you don't want to re-paste the token on every fresh terminal.
+
+*Trade-off:* the file exists on disk, so it can be captured by backups, search indexers, or an accidental `git add -f`. `0600` permissions plus the gitignore keep this well-controlled in practice.
+
+### Option 3 — OS keychain (strongest, optional)
+
+For users who want zero secrets on disk and zero shell-history exposure, fetch the token from the OS keychain at launch.
+
+**macOS** (built-in `security` command):
+
+```bash
+# one-time: prompts for the token and stores it in the Keychain
+security add-generic-password -a $USER -s jenkins-api -w
+
+# every launch (wrap in a shell alias so daily use stays one command)
+export JENKINS_TEST_USERNAME=svc-account@example.com
+export JENKINS_TEST_API_KEY=$(security find-generic-password -s jenkins-api -w)
+analyseJenkins
+```
+
+**Linux** — equivalent via `secret-tool` from `libsecret-tools` (GNOME Keyring / KDE Wallet).
+**Windows** — equivalent via the `CredentialManager` PowerShell module (`Get-StoredCredential`).
+
+### Precedence
+
+Shell env vars take precedence over `.env` values. So you can keep your normal credentials in `.env` and override `JENKINS_MAX_WORKERS=12` for a single launch without editing the file.
+
+### Variables
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `JENKINS_TEST_USERNAME` | yes | — | Jenkins service-account username/email. |
+| `JENKINS_TEST_API_KEY` | yes | — | Matching Jenkins API token. |
+| `JENKINS_MAX_WORKERS` | no | `24` (range **1–64**) | Concurrent Jenkins API calls during a Fetch/Refresh. Raise on a strong master; lower if you see HTTP 429/503. |
+| `JENKINS_POLL_WORKERS` | no | `15` (range **1–32**) | Concurrency for the background auto-refresh poll. Tuned separately so polling doesn't compete with user fetches. |
+| `RACE_HOT_RELOAD` | no | off | Set to `1` to reload `config/rules/*.yaml` without restarting RACE. **Off by default for security** (see below). |
+| `RACE_FRESH_TOKEN_ON_BOOT` | no | on (`1`) | The local API token is rotated on every RACE restart by default. Set to `0` to keep a stable token across restarts (rare — useful only when a long-lived CI session can't re-read `~/.race/token` between calls). |
+
+> Out-of-range or non-numeric tuning values are silently ignored; the defaults stand.
+
+The same Jenkins credential pair works across every environment configured in `config/contexts.json` — one sign-in covers all subsequent API calls. If the pair is missing or rejected, the manual username + API-token fields appear as a fallback.
+
+<br>
+
+## Security model
+
+RACE adds a few app-layer guards so misbehaving local code (a browser tab pointed somewhere odd, an accidental script, a hostile YAML rule) can't drive the dashboard into doing something silly.
+
+### Defence-in-depth
+
+| Guard | Role |
+|---|---|
+| **X-RACE-Token** on `/api/*` | Small extra friction against accidental local cross-origin access. Not a strong control on a single-user laptop — see note below. |
+| **SSRF guard** on Jenkins URL | Refuses outbound requests to private/loopback/metadata addresses unless explicitly allowed. |
+| **Per-IP rate limit** (flask-limiter) | Caps runaway loops and accidental fork-bombs. |
+| **ReDoS-safe regex** (`regex` package with per-pattern timeout) | Hostile or unfortunate YAML rule patterns can't hang the dashboard. |
+| **Redacted error responses** | Stack traces, file paths, and credential fragments are stripped from API error bodies. |
+| **Rule hot-reload off by default** | `RACE_HOT_RELOAD=1` is opt-in, so anyone with write access to `config/rules/` can't silently inject patterns at runtime. |
+
+### Local API token (X-RACE-Token)
+
+RACE mints a **fresh** per-machine token on every boot and stores it at `~/.race/token` (mode `0600`). Browsers pick it up automatically from a meta tag, so normal usage is invisible. The token never outlives the current process — **restart = rotation**. It's a small defence-in-depth measure layered on top of the controls above, not the primary protection; anything running as you on the same machine can read the file while the process is alive.
+
+A symlinked or wrong-owned `~/.race/token` is *not* silently overwritten — RACE refuses to touch it, logs a clear warning, and falls back to an in-memory token for the session so the dashboard stays usable.
+
+**Opting out of rotation.** Set `RACE_FRESH_TOKEN_ON_BOOT=0` to keep a stable token across restarts. Useful only when a long-lived CI session can't re-read the file between calls; everyday users should leave it at the default.
+
+### Opting into rule hot-reload
+
+By default RACE loads `config/rules/*.yaml` once at boot. If you're authoring rules and want live reload, set:
+
+```bash
+RACE_HOT_RELOAD=1 analyseJenkins
+```
+
+<br>
+
 
 ## Project layout
 
-```text
+```
 .
-├── app.py                  ← Flask app + routes
-├── jenkins_client.py       ← Jenkins HTTP client (auth, retry, CSRF)
-├── pipeline.py             ← Classifier + stage orchestration
-├── models.py               ← Dataclasses + enums
-├── setup/
-│   ├── setup.sh            ← Register analyseJenkins (macOS / Linux)
-│   └── setup.ps1           ← Register analyseJenkins (Windows)
-│
-├── config/
-│   ├── contexts.json       ← Jenkins instances + predefined job lists
-│   ├── rules.yaml          ← Failure-classification rules (hand-edited)
-│   └── job_lists/          ← Per-environment job lists
-│
-├── static/
-│   ├── css/dashboard-theme.css
-│   └── js/                 ← Frontend modules (no build step)
-│
-└── templates/
-    └── dashboard.html
+├ app.py                       ← entry point
+├ pyproject.toml               ← dependencies + Ruff / mypy config
+├ race/                        ← backend package
+│   ├ application.py           ← Flask factory
+│   ├ jenkins_client.py        ← HTTP client (auth, retry, CSRF)
+│   ├ pipeline.py              ← Classifier + Stage-1 / Stage-2
+│   ├ models.py                ← dataclasses + enums
+│   ├ routes/                  ← one Blueprint per API domain
+│   └ lib/                     ← shared helpers (state, creds, sse, …)
+├ static/  templates/          ← vanilla-JS frontend
+├ config/                      ← contexts.json + rules/*.yaml
+└ scripts/                     ← setup.sh / setup.ps1 / lock.sh
 ```
 
----
+<br>
+
+
+### Adding a classification rule
+
+Rules are YAML in `config/rules/`. The author's guide is [`config/rules/HOW-TO-ADD-A-RULE.md`](config/rules/HOW-TO-ADD-A-RULE.md) — start there. Draft and test your rule in the in-dashboard **Test Classification** panel, then save it to the matching file. Set `RACE_HOT_RELOAD=1` so you don't restart between iterations.
+
+<br>
 
 ## Troubleshooting
 
-<details>
-<summary><strong>Common issues</strong></summary>
+### If the browser shows something odd
 
-&nbsp;
+Try these in order — most issues clear at step 1 or 2.
 
-| Symptom | Fix |
-| ------- | --- |
-| `python: command not found` (Linux/Mac) | Use `python3` instead. |
-| PowerShell blocks `Activate.ps1` | `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` |
-| Port `5000` already in use | Stop the other process, or change the port at the bottom of `app.py`. |
-| Browser shows stale UI after pull / redeploy | Hard-reload (`Cmd+Shift+R` Mac, `Ctrl+Shift+R` Win/Linux). Restarting the server bumps the cache-buster automatically. |
-| Env-creds button doesn't appear | Both `JENKINS_NP_USERNAME` and `JENKINS_NP_API_KEY1` must be set in the **same shell** that launched `python app.py`. |
-| Rerun returns `403` | Your Jenkins requires a CSRF crumb — the client fetches one automatically. If it still fails, check your token has *Job → Build* permission. |
-| `analyseJenkins: command not found` after `setup/setup.sh` | Reload your shell: `source ~/.zshrc` (or `~/.bash_profile`, `~/.bashrc`). Opening a new terminal works too. |
-| `setup/setup.sh` says "doesn't look like the project root" | `cd` into the project folder first, then re-run. |
-| Moved the project, `analyseJenkins` now fails | Re-run `bash setup/setup.sh` (or `.\setup\setup.ps1`) from the new location — it replaces the old entry. |
-| Table cells show `—` for test counts | Hover any dash cell — the tooltip shows why (`api_404,console_no_match` means Jenkins didn't publish a testReport and the console fallback didn't match). Server stdout has matching `[WARNING] jenkins.metrics: MISSING …` lines per job. |
-| Fetch-jobs is slow | Bump worker count: `export JENKINS_MAX_WORKERS=40` (see [Tuning fetch speed](#tuning-fetch-speed)). |
+1. **Hard-refresh the page** — `Cmd/Ctrl + Shift + R`. Fixes most after-update glitches and clears the red *"RACE session expired"* banner. (The amber *"Jenkins rejected the stored credentials"* banner is different — that one needs a credential update, see step 4.)
+2. **If the page is still broken, or the red banner keeps coming back** — restart RACE (`Ctrl+C` in the terminal, then `analyseJenkins` again) and hard-refresh once more. Restarting rotates the local token and pulls everything fresh.
+3. **Open the in-app Diagnostics panel** — the small Diagnostics icon in the dashboard header. RACE captures auth issues, failed fetches, classifier warnings, and 401s there in plain English. This is the right first stop for anything you can't see on the page.
+4. **If login keeps failing** — open `.env` (or your shell env vars) and re-check `JENKINS_TEST_USERNAME` and `JENKINS_TEST_API_KEY`. The terminal where RACE is running shows the exact reason; look for `[WARN]` or `[ENV-AUTH]` lines.
+5. **As a last resort** — open the browser DevTools console (`F12` → Console tab). Useful when something fails before the Diagnostics panel even loads.
 
-</details>
+### General
+
+| If you see this… | Try this |
+|---|---|
+| `python: command not found` | Use `python3`, or close and reopen Terminal so `PATH` updates. |
+| `analyseJenkins: command not found` | Open a **fresh** terminal window — the shortcut only loads in new shells. |
+| Want to launch the manual way | `cd` into the project, then `source venv/bin/activate && python app.py` (macOS / Linux) or `venv\Scripts\Activate.ps1 ; python app.py` (Windows). |
+| Dashboard looks weird after an update | Hard-refresh: `Cmd+Shift+R` (Mac) / `Ctrl+Shift+R` (Windows / Linux). |
+| Test counts show only `—` | Hover the dash — the tooltip explains exactly why. |
+| Port 5000 is busy | Stop the other app, or change the port at the bottom of `app.py`. |
+| Red banner: *"RACE session expired (local token rotated)"* / repeated `401` across dashboard calls | The local API token rotated under your tab (RACE restarted). Hard-refresh once (`Cmd/Ctrl+Shift+R`). If the banner returns, restart RACE — every restart rotates the token automatically. Need a refresher? `bash scripts/token-help.sh`. |
+| Amber banner: *"Jenkins rejected the stored credentials (401)"* | Your `JENKINS_TEST_USERNAME` / `JENKINS_TEST_API_KEY` are stale. Update them in your shell env or `.env`, then restart RACE. Hard-refresh will **not** clear this — the credentials must change. |
+| `401` from `/api/*` in `curl` or a CI script | Attach the local API token: `-H "X-RACE-Token: $(cat ~/.race/token)"`. |
+| Boot log shows *"in-memory token … fingerprint=sha256:…"* | `~/.race/token` is unwritable, symlinked, or owner-mismatched. RACE is running fine with a session-only token. To restore on-disk persistence: fix the file (permissions/ownership/symlink) and restart RACE. Run `bash scripts/token-help.sh` for the full explainer. |
+| Jenkins auth fails after the API key was rotated upstream | Update `JENKINS_TEST_API_KEY` in your shell env or `.env`, then restart RACE. The manual login fields stay available as a fallback in the dashboard. |
+
+<br>
+
+
+## Dependency lockfile
+
+`requirements.lock.txt` is a clean pinned lockfile generated from `pyproject.toml`. It is **autogenerated — do not edit by hand**. Every transitive dependency carries a `# via …` annotation so PR review stays readable.
+
+After touching the `dependencies` block in `pyproject.toml`, regenerate it:
+
+```bash
+bash scripts/lock.sh
+# (under the hood: pip-compile --strip-extras --quiet --output-file=requirements.lock.txt pyproject.toml)
+```
+
+Commit `pyproject.toml` and `requirements.lock.txt` together.
+
+Periodic CVE scan:
+
+```bash
+pip-audit -r requirements.lock.txt
+```
+
+Validate against the corporate PyPI mirror after any lockfile change. Run from a clean venv on the supported Python floor (3.10) so you're testing the mirror, not stale local wheels:
+
+```bash
+pip cache purge
+python3.10 -m venv /tmp/race-mirror-check && source /tmp/race-mirror-check/bin/activate
+pip install --dry-run --no-cache-dir -r requirements.lock.txt
+```
+
+If a pin reports `No matching distribution`, ask the mirror admin to trigger a re-sync, or pin the affected package one minor older in `pyproject.toml` and re-run `bash scripts/lock.sh`.
+
+**Why no `--generate-hashes`?** RACE is a local-only internal tool installed inside a VPN-gated corporate environment via the corp PyPI mirror. The supply-chain protection that hash-locking provides is already covered by the corp install path, so the committed lockfile stays small and reviewable. If security ever asks for strict hash verification, generate the artifact on demand:
+
+```bash
+pip-compile --generate-hashes --output-file=requirements.hashes.txt pyproject.toml
+# install with: pip install --require-hashes -r requirements.hashes.txt
+```
+
+`requirements.hashes.txt` is **not** committed — it's an on-demand compliance artifact.
+
+<br>
+
+<sub><em>Created by Sudhindra Immidi.</em></sub>

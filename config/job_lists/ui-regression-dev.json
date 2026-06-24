@@ -1,13 +1,9 @@
 {
-  "name": "UI Regression — DEV",
-  "description": "Full UI regression suite for development environment",
-  "environment": "DEV",
   "jobs": [
     "ui-regression-checkout-dev",
     "ui-regression-login-dev",
     "ui-regression-search-dev",
-    "ui-regression-plp-dev",
-    "ui-regression-pdp-dev",
+    "ui-regression-home-dev",
     "ui-regression-cart-dev",
     "ui-regression-wishlist-dev",
     "ui-regression-account-settings-dev",
